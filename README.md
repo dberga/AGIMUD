@@ -24,10 +24,9 @@ Then, to quit and save your world, press Ctrl+C
 
 ## Social Reasoning Methods
 
-To run the theories of mind, run the minimal and extended tests here:
+To run the theories of mind, check (and modify as needed) the `reasoning_tests.json` and run tests with:
 ```
 python swm_reason.py
-python reasoning_tests.py
 ```
 ## Network Connections
 
