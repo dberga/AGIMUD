@@ -29,3 +29,32 @@ To run the theories of mind, run the minimal and extended tests here:
 python swm_reason.py
 python reasoning_tests.py
 ```
+## Network Connections
+
+### Centralized mode (Server - Client)
+
+Check connections configuration on the `network_server_config.json` and `network_client_config.json`. By default this is on localhost and port 5000-5001.
+
+First copy or generate world to specific folder `world_centralized`:
+```
+python swm_generate.py --folder world_centralized
+```
+Then run a new server:
+```
+python swm_run_server.py --new
+```
+Clients can connect now, through:
+```
+python swm_run_client.py --new
+```
+### P2P mode (Host - Joiner)
+Check connections configuration on the `network_p2p_config.json` and `network_p2p_join_config.json`. By default this is on localhost and port 6000-6002 and 7000 for the signaling server.
+
+First copy or generate world to specific folder `world_p2p`:
+```
+python swm_run_p2p.py --host --new
+```
+Joiner peers can connect now, through:
+```
+python swm_run_p2p.py --join --config network_p2p_join_config.json
+```
