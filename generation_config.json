@@ -1,0 +1,322 @@
+{
+  "data_sources": {
+    "character_names": "characters_names.txt",
+    "object_names": "objects_names.txt",
+    "scene_names": "scenes_names.txt"
+  },
+  "action_catalog": [
+    "GATHER_ALL_RESOURCES_GREEDY",
+    "HARVEST_SUSTAINABLE_SHARED",
+    "NEGOTIATE_COOPERATIVE_PACT",
+    "IDLE_WAIT",
+    "ATTACK_ENEMY_GREEDY",
+    "SHARE_RESOURCES_WITH_ALLIES",
+    "HOARD_RESOURCES_SELFISHLY",
+    "PROPOSE_PEACE_TREATY",
+    "DECLARE_WAR_AGGRESSIVE"
+  ],
+  "character_template": {
+    "id": "{id}",
+    "name": "{name}",
+    "status_variables": {
+      "health": {"type": "random_int", "min": 50, "max": 100},
+      "stamina": {"type": "random_int", "min": 40, "max": 100},
+      "hunger": {"type": "random_int", "min": 10, "max": 80},
+      "thirst": {"type": "random_int", "min": 10, "max": 80},
+      "morale": {"type": "random_int", "min": 30, "max": 95},
+      "is_alive": {"type": "constant", "value": true},
+      "is_resting": {"type": "random_choice", "values": [true, false]},
+      "current_emotion": {"type": "random_choice", "source": "emotions"}
+    },
+    "contained_objects": {"type": "random_sample", "source": "object_names", "min": 0, "max": 3},
+    "ai_state": {"type": "random_choice", "source": "ai_states"},
+    "behavior_tree": {
+      "root": "Select",
+      "children": [
+        {
+          "type": "Sequence",
+          "name": "Primary_Duty",
+          "conditions": ["has_target"],
+          "actions": ["approach_target", "interact"]
+        }
+      ]
+    },
+    "memory_perception": {
+      "known_locations": {"type": "random_sample", "source": "locations", "min": 1, "max": 3},
+      "known_characters": {"type": "random_sample", "source": "character_names", "min": 1, "max": 3},
+      "recent_events": []
+    },
+    "navigation": {
+      "current_location": {"type": "random_choice", "source": "locations"},
+      "destination": {"type": "random_choice", "source": "locations"},
+      "waypoints": {"type": "random_sample", "source": "locations", "min": 1, "max": 3},
+      "movement_speed": {"type": "random_float", "min": 2.0, "max": 5.0, "decimals": 1}
+    },
+    "social_attributes": {
+      "faction": {"type": "random_choice", "source": "factions"},
+      "alignment": {"type": "random_choice", "source": "alignments"},
+      "relationships": {
+        "type": "random_relationships",
+        "source": "character_names",
+        "max_count": 4
+      },
+      "schwartz_values": {
+        "self_direction": {"type": "random_float", "min": 0.3, "max": 1.0, "decimals": 2},
+        "stimulation": {"type": "random_float", "min": 0.3, "max": 1.0, "decimals": 2},
+        "hedonism": {"type": "random_float", "min": 0.3, "max": 1.0, "decimals": 2},
+        "achievement": {"type": "random_float", "min": 0.3, "max": 1.0, "decimals": 2},
+        "power": {"type": "random_float", "min": 0.3, "max": 1.0, "decimals": 2},
+        "security": {"type": "random_float", "min": 0.3, "max": 1.0, "decimals": 2},
+        "conformity": {"type": "random_float", "min": 0.3, "max": 1.0, "decimals": 2},
+        "tradition": {"type": "random_float", "min": 0.3, "max": 1.0, "decimals": 2},
+        "benevolence": {"type": "random_float", "min": 0.3, "max": 1.0, "decimals": 2},
+        "universalism": {"type": "random_float", "min": 0.3, "max": 1.0, "decimals": 2}
+      }
+    },
+    "dialogue_history": []
+  },
+  "object_template": {
+    "id": "{id}",
+    "name": "{name}",
+    "object_variables": {
+      "durability": {"type": "random_int", "min": 50, "max": 100},
+      "weight": {"type": "random_float", "min": 0.1, "max": 10.0, "decimals": 1},
+      "value": {"type": "random_int", "min": 1, "max": 1000},
+      "is_equipped": {"type": "random_choice", "values": [true, false]},
+      "is_broken": {"type": "random_choice", "values": [true, false]},
+      "quality": {"type": "random_choice", "source": "qualities"}
+    },
+    "contained_objects": {"type": "random_sample", "source": "object_names", "min": 0, "max": 2},
+    "timers": {
+      "cooldown": {"type": "random_int", "min": 0, "max": 60},
+      "decay": {"type": "random_int", "min": 0, "max": 3600}
+    },
+    "physics_materials": {
+      "primary": {"type": "random_choice", "source": "materials"},
+      "secondary": {"type": "random_choice", "source": "materials"},
+      "density": {"type": "random_float", "min": 0.5, "max": 15.0, "decimals": 2},
+      "friction": {"type": "random_float", "min": 0.1, "max": 0.9, "decimals": 2},
+      "bounciness": {"type": "random_float", "min": 0.0, "max": 0.5, "decimals": 2}
+    },
+    "spawn_probability": {"type": "random_float", "min": 0.05, "max": 0.8, "decimals": 2},
+    "model_boundaries": {
+      "width": {"type": "random_float", "min": 0.05, "max": 0.5, "decimals": 2},
+      "height": {"type": "random_float", "min": 0.05, "max": 2.0, "decimals": 2},
+      "depth": {"type": "random_float", "min": 0.05, "max": 0.5, "decimals": 2},
+      "collision_radius": {"type": "random_float", "min": 0.05, "max": 0.5, "decimals": 2}
+    },
+    "properties": {
+      "type": {"type": "random_choice", "source": "object_types"},
+      "subtype": {"type": "random_choice", "source": "object_subtypes"},
+      "level_required": {"type": "random_int", "min": 1, "max": 20},
+      "effects": {
+        "damage": {"type": "random_int", "min": 5, "max": 50},
+        "defense": {"type": "random_int", "min": 5, "max": 50},
+        "mana_boost": {"type": "random_int", "min": 5, "max": 50}
+      }
+    }
+  },
+  "scene_template": {
+    "scenes": {
+      "current_scene": "{name}",
+      "world_regions": [
+        {
+          "region_id": "REGION_001",
+          "name": {"type": "random_region_name", "source": "character_names"},
+          "description": {"type": "random_description", "source": "scene_types"},
+          "climate": {"type": "random_choice", "source": "climates"},
+          "terrain_type": {"type": "random_choice", "source": "terrain_types"}
+        }
+      ],
+      "zones": {
+        "type": "generate_zones",
+        "count": {"type": "random_int", "min": 3, "max": 6},
+        "template": {
+          "zone_id": "ZONE_{index:03d}",
+          "name": {"type": "random_choice", "source": "locations"},
+          "region_id": "REGION_001",
+          "zone_type": {"type": "random_choice", "source": "scene_types"},
+          "is_restricted": {"type": "random_choice", "values": [true, false]},
+          "safe_zone": {"type": "random_choice", "values": [true, false]}
+        }
+      },
+      "buildings_containers": [
+        {
+          "building_id": "BLD_001",
+          "name": {"type": "random_building_name", "source": "locations"},
+          "region_id": "REGION_001",
+          "floors": {"type": "random_int", "min": 1, "max": 6},
+          "rooms": [
+            {"room_id": "RM_001", "name": "Great Hall", "zone_id": "ZONE_001"},
+            {"room_id": "RM_002", "name": "Armory", "zone_id": "ZONE_001"},
+            {"room_id": "RM_003", "name": "Library", "zone_id": "ZONE_001"}
+          ]
+        }
+      ],
+      "waypoints": {
+        "type": "generate_waypoints",
+        "count": {"type": "random_int", "min": 3, "max": 8},
+        "template": {
+          "waypoint_id": "WP_{index:03d}",
+          "name": "Point_{index}",
+          "zone_id": {"type": "random_choice", "source": "zone_ids"},
+          "x": {"type": "random_float", "min": -50, "max": 50, "decimals": 2},
+          "y": {"type": "random_float", "min": -50, "max": 50, "decimals": 2},
+          "z": {"type": "random_float", "min": -50, "max": 50, "decimals": 2}
+        }
+      },
+      "spawn_list": {
+        "type": "generate_spawns",
+        "count": {"type": "random_int", "min": 2, "max": 5},
+        "template": {
+          "spawn_id": "SPAWN_{index:03d}",
+          "zone_id": {"type": "random_choice", "source": "zone_ids"},
+          "spawn_type": {"type": "random_choice", "values": ["character", "monster", "object"]},
+          "entity_id": "ENTITY_{index:04d}",
+          "waypoint_id": {"type": "random_choice", "source": "waypoint_ids"},
+          "respawn_time": {"type": "random_int", "min": 60, "max": 3600}
+        }
+      },
+      "object_list": {
+        "type": "generate_objects",
+        "count": {"type": "random_int", "min": 3, "max": 8},
+        "template": {
+          "object_id": "OBJ_{index:04d}",
+          "zone_id": {"type": "random_choice", "source": "zone_ids"},
+          "waypoint_id": {"type": "random_choice", "source": "waypoint_ids"},
+          "state": {"type": "random_choice", "values": ["placed", "hidden", "inventory", "equipped"]},
+          "spawned": {"type": "random_choice", "values": [true, false]}
+        }
+      },
+      "scene_metadata": {
+        "version": "1.0",
+        "created": {"type": "current_timestamp"},
+        "total_regions": 1,
+        "total_zones": {"type": "reference", "path": "scenes.zones.count"},
+        "total_buildings": 1,
+        "total_waypoints": {"type": "reference", "path": "scenes.waypoints.count"}
+      }
+    }
+  },
+  "rules_template": [
+    {
+      "id": "RULE_001",
+      "name": "combat_condition",
+      "type": "condition",
+      "description": "Check if combat should start",
+      "conditions": [
+        {"type": "greater_than", "field": "enemies_nearby", "value": 0},
+        {"type": "not_equal", "field": "combat_state", "value": "fighting"}
+      ]
+    },
+    {
+      "id": "RULE_002",
+      "name": "combat_transition",
+      "type": "transition",
+      "description": "Transition to combat state",
+      "from_state": "patrol",
+      "to_state": "combat",
+      "conditions": [
+        {"type": "greater_than", "field": "enemies_nearby", "value": 0},
+        {"type": "less_than", "field": "health", "value": 30}
+      ]
+    },
+    {
+      "id": "RULE_003",
+      "name": "heal_mechanic",
+      "type": "mechanic",
+      "description": "Heal when health is low",
+      "conditions": [
+        {"type": "less_than", "field": "health", "value": 25},
+        {"type": "contains", "field": "contained_objects", "value": "potion"}
+      ],
+      "effects": [
+        {"type": "modify", "target": "health", "delta": 30},
+        {"type": "remove", "target": "contained_objects", "value": "potion"}
+      ]
+    },
+    {
+      "id": "RULE_004",
+      "name": "rest_recovery",
+      "type": "mechanic",
+      "description": "Rest to recover stamina",
+      "conditions": [
+        {"type": "less_than", "field": "stamina", "value": 30},
+        {"type": "equal", "field": "safe_zone", "value": true}
+      ],
+      "effects": [
+        {"type": "modify", "target": "stamina", "delta": 50},
+        {"type": "set", "target": "is_resting", "value": true}
+      ]
+    },
+    {
+      "id": "RULE_005",
+      "name": "greedy_action_filter",
+      "type": "condition",
+      "description": "Filter out greedy actions when morale is low",
+      "conditions": [
+        {"type": "less_than", "field": "morale", "value": 30},
+        {"type": "contains", "field": "action", "value": "GREEDY"}
+      ]
+    },
+    {
+      "id": "RULE_006",
+      "name": "cooperative_action_boost",
+      "type": "mechanic",
+      "description": "Boost morale for cooperative actions",
+      "conditions": [
+        {"type": "equal", "field": "action", "value": "HARVEST_SUSTAINABLE_SHARED"},
+        {"type": "greater_than", "field": "morale", "value": 50}
+      ],
+      "effects": [
+        {"type": "modify", "target": "morale", "delta": 10},
+        {"type": "modify", "target": "stamina", "delta": 5}
+      ]
+    }
+  ],
+  "world_states_template": {
+    "version": "1.0",
+    "created": {"type": "current_timestamp"},
+    "current_scene": {"type": "reference", "path": "scene_name"},
+    "current_state": {"type": "random_choice", "values": ["patrol", "idle", "combat", "resting", "travelling"]},
+    "persistent_flags": {
+      "game_started": true,
+      "tutorial_completed": false,
+      "player_in_combat": false,
+      "player_has_quest": false,
+      "player_has_key": false,
+      "dragon_defeated": false,
+      "king_saved": false
+    },
+    "scene_states": {},
+    "global_timers": {
+      "day_cycle": 0,
+      "world_time": 0,
+      "game_time": 0,
+      "combat_timer": 0,
+      "rest_timer": 0
+    },
+    "global_states": {
+      "weather": {"type": "random_choice", "source": "weather"},
+      "time_of_day": {"type": "random_choice", "source": "time_of_day"},
+      "world_difficulty": {"type": "random_choice", "values": [1.0, 1.5, 2.0, 3.0]}
+    },
+    "object_states": {},
+    "player_state": {
+      "health": 100,
+      "stamina": 100,
+      "mana": 50,
+      "gold": {"type": "random_int", "min": 50, "max": 500},
+      "xp": 0,
+      "level": 1,
+      "inventory": [],
+      "equipped": {},
+      "quests": [],
+      "completed_quests": []
+    },
+    "world_entities": {
+      "characters": {},
+      "monsters": {}
+    }
+  }
+}

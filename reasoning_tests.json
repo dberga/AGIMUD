@@ -1,0 +1,239 @@
+{
+  "test_configurations": [
+    {
+      "name": "balanced_scenario",
+      "description": "Balanced social reasoning configuration",
+      "schwartz_weights": {
+        "self_direction": 0.8,
+        "stimulation": 0.6,
+        "hedonism": 0.5,
+        "achievement": 0.8,
+        "power": 0.5,
+        "security": 0.7,
+        "conformity": 0.6,
+        "tradition": 0.5,
+        "benevolence": 0.8,
+        "universalism": 0.7
+      },
+      "ostrom_weights": {
+        "rule_1": 2.0,
+        "rule_2": 1.5
+      },
+      "ostrom_sanctions": {
+        "rule_1": 0.5,
+        "rule_2": 0.3
+      },
+      "beliefs": {
+        "shared_resource": 5.0,
+        "trust": 5.0,
+        "cooperation": 5.0
+      },
+      "peer_beliefs": {
+        "shared_resource": 4.0,
+        "trust": 4.0,
+        "cooperation": 4.0
+      },
+      "discrepancy_flag": false
+    },
+    {
+      "name": "high_benevolence",
+      "description": "High benevolence, low power configuration",
+      "schwartz_weights": {
+        "self_direction": 0.6,
+        "stimulation": 0.4,
+        "hedonism": 0.3,
+        "achievement": 0.5,
+        "power": 0.1,
+        "security": 0.6,
+        "conformity": 0.7,
+        "tradition": 0.6,
+        "benevolence": 5.0,
+        "universalism": 4.0
+      },
+      "ostrom_weights": {
+        "rule_1": 3.0,
+        "rule_2": 2.5
+      },
+      "ostrom_sanctions": {
+        "rule_1": 0.2,
+        "rule_2": 0.1
+      },
+      "beliefs": {
+        "shared_resource": 8.0,
+        "trust": 9.0,
+        "cooperation": 9.0
+      },
+      "peer_beliefs": {
+        "shared_resource": 7.0,
+        "trust": 8.0,
+        "cooperation": 8.0
+      },
+      "discrepancy_flag": false
+    },
+    {
+      "name": "high_power",
+      "description": "High power, low benevolence configuration",
+      "schwartz_weights": {
+        "self_direction": 0.7,
+        "stimulation": 0.8,
+        "hedonism": 0.6,
+        "achievement": 4.0,
+        "power": 5.0,
+        "security": 3.0,
+        "conformity": 0.2,
+        "tradition": 0.1,
+        "benevolence": 0.1,
+        "universalism": 0.1
+      },
+      "ostrom_weights": {
+        "rule_1": 0.5,
+        "rule_2": 0.3
+      },
+      "ostrom_sanctions": {
+        "rule_1": 0.9,
+        "rule_2": 0.8
+      },
+      "beliefs": {
+        "shared_resource": 2.0,
+        "trust": 1.0,
+        "cooperation": 1.0
+      },
+      "peer_beliefs": {
+        "shared_resource": 1.0,
+        "trust": 0.5,
+        "cooperation": 0.5
+      },
+      "discrepancy_flag": true
+    },
+    {
+      "name": "high_belief_discrepancy",
+      "description": "Configuration with high belief discrepancy",
+      "schwartz_weights": {
+        "self_direction": 0.8,
+        "stimulation": 0.5,
+        "hedonism": 0.4,
+        "achievement": 0.8,
+        "power": 0.6,
+        "security": 0.7,
+        "conformity": 0.5,
+        "tradition": 0.4,
+        "benevolence": 0.7,
+        "universalism": 0.6
+      },
+      "ostrom_weights": {
+        "rule_1": 2.0,
+        "rule_2": 1.5
+      },
+      "ostrom_sanctions": {
+        "rule_1": 0.5,
+        "rule_2": 0.3
+      },
+      "beliefs": {
+        "shared_resource": 10.0,
+        "trust": 8.0,
+        "cooperation": 9.0,
+        "loyalty": 7.0
+      },
+      "peer_beliefs": {
+        "shared_resource": 2.0,
+        "trust": 3.0,
+        "cooperation": 2.0,
+        "loyalty": 1.0
+      },
+      "discrepancy_flag": true
+    },
+    {
+      "name": "cooperative_utopia",
+      "description": "Highly cooperative configuration",
+      "schwartz_weights": {
+        "self_direction": 0.8,
+        "stimulation": 0.5,
+        "hedonism": 0.3,
+        "achievement": 0.6,
+        "power": 0.2,
+        "security": 0.8,
+        "conformity": 0.9,
+        "tradition": 0.7,
+        "benevolence": 4.0,
+        "universalism": 4.0
+      },
+      "ostrom_weights": {
+        "rule_1": 5.0,
+        "rule_2": 4.0
+      },
+      "ostrom_sanctions": {
+        "rule_1": 0.1,
+        "rule_2": 0.05
+      },
+      "beliefs": {
+        "shared_resource": 10.0,
+        "trust": 10.0,
+        "cooperation": 10.0,
+        "equality": 10.0
+      },
+      "peer_beliefs": {
+        "shared_resource": 9.0,
+        "trust": 9.0,
+        "cooperation": 9.0,
+        "equality": 9.0
+      },
+      "discrepancy_flag": false
+    }
+  ],
+  "test_intents": [
+    "GATHER_ALL_RESOURCES_GREEDY",
+    "HARVEST_SUSTAINABLE_SHARED",
+    "NEGOTIATE_COOPERATIVE_PACT",
+    "IDLE_WAIT",
+    "UNKNOWN_CUSTOM_ACTION",
+    "ATTACK_ENEMY_GREEDY",
+    "SHARE_RESOURCES_WITH_ALLIES",
+    "HOARD_RESOURCES_SELFISHLY",
+    "PROPOSE_PEACE_TREATY",
+    "DECLARE_WAR_AGGRESSIVE"
+  ],
+  "batch_tests": [
+    {
+      "name": "greedy_intents",
+      "description": "Test all greedy intents",
+      "intents": [
+        "GATHER_ALL_RESOURCES_GREEDY",
+        "ATTACK_ENEMY_GREEDY",
+        "HOARD_RESOURCES_SELFISHLY",
+        "DECLARE_WAR_AGGRESSIVE"
+      ]
+    },
+    {
+      "name": "cooperative_intents",
+      "description": "Test all cooperative intents",
+      "intents": [
+        "HARVEST_SUSTAINABLE_SHARED",
+        "NEGOTIATE_COOPERATIVE_PACT",
+        "SHARE_RESOURCES_WITH_ALLIES",
+        "PROPOSE_PEACE_TREATY"
+      ]
+    },
+    {
+      "name": "mixed_intents",
+      "description": "Test mixed intents",
+      "intents": [
+        "GATHER_ALL_RESOURCES_GREEDY",
+        "SHARE_RESOURCES_WITH_ALLIES",
+        "DECLARE_WAR_AGGRESSIVE",
+        "PROPOSE_PEACE_TREATY"
+      ]
+    }
+  ],
+  "expected_outcomes": {
+    "GATHER_ALL_RESOURCES_GREEDY": {
+      "high_benevolence": "HARVEST_SUSTAINABLE_SHARED",
+      "high_power": "GATHER_ALL_RESOURCES_GREEDY",
+      "balanced": "HARVEST_SUSTAINABLE_SHARED"
+    },
+    "NEGOTIATE_COOPERATIVE_PACT": {
+      "high_benevolence": "NEGOTIATE_COOPERATIVE_PACT",
+      "high_power": "IDLE_WAIT",
+      "balanced": "NEGOTIATE_COOPERATIVE_PACT"
+    }
+  }
+}
