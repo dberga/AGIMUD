@@ -1,0 +1,23 @@
+{
+  "node": {
+    "id": "node_002",
+    "host": "127.0.0.1",
+    "port": 6002
+  },
+  "signaling_server": {
+    "host": "127.0.0.1",
+    "port": 7000
+  },
+  "world": {
+    "world_folder": "world_p2p",
+    "sync_interval": 2.0
+  },
+  "user": {
+    "name": "P2P_Player_2",
+    "initial_scene": "Castle"
+  },
+  "logging": {
+    "log_level": "info",
+    "log_file": "p2p.log"
+  }
+}

@@ -7,6 +7,7 @@ import json
 import os
 import random
 import time
+import re
 from typing import Dict, List, Any, Optional
 from copy import deepcopy
 from datetime import datetime
@@ -94,9 +95,9 @@ class TemplateEngine:
                 names = self.generator.character_names
             
             if not names or len(names) == 0:
-                names = ["Default_Region"]
+                names = ["Eldoria"]
             
-            name = random.choice(names) if names else "Default_Region"
+            name = random.choice(names) if names else "Eldoria"
             prefixes = ['Kingdom', 'Empire', 'Land', 'Realm', 'Province', 'Domain']
             return f"{random.choice(prefixes)} of {name}"
         
@@ -326,11 +327,12 @@ class TemplateEngine:
 class KnowledgeBaseGenerator:
     """Generate knowledge bases from templates"""
     
-    def __init__(self, config_file: str = "generation_config.json"):
+    def __init__(self, config_file: str = "generation_config.json", output_folder: str = None):
         self.config = self._load_config(config_file)
         self._load_name_files()
         self._load_vocabulary()
         self.template_engine = TemplateEngine(self)
+        self.output_folder = output_folder
         self.world_folder = None
         print("[OK] Knowledge Base Generator initialized")
         print(f"  Loaded {len(self.character_names)} character names")
@@ -481,7 +483,7 @@ class KnowledgeBaseGenerator:
             'character_names': self.character_names,
             'object_names': self.object_names,
             'scene_names': self.scene_names,
-            'locations': self._get_vocab('locations', ['Default_Location'])
+            'locations': self._get_vocab('locations', ['Unknown'])
         }
         
         scene = self.template_engine.build(template, context)
@@ -560,7 +562,7 @@ class KnowledgeBaseGenerator:
         scene_data = self.generate_scene() if generate_scene else {}
         rules = self.generate_rules() if generate_rules else []
         
-        scene_name = scene_data.get("scenes", {}).get("current_scene", "DEFAULT_SCENE") if scene_data else "DEFAULT_SCENE"
+        scene_name = scene_data.get("scenes", {}).get("current_scene", "UNKNOWN") if scene_data else "UNKNOWN"
         world_states = self.generate_world_states(scene_name)
         
         knowledge_base = {
@@ -575,38 +577,50 @@ class KnowledgeBaseGenerator:
         print(f"[OK] Generated {len(characters)} characters, {len(objects)} objects")
         return knowledge_base
     
-    def save_knowledge_base(self, kb: Dict[str, Any]) -> bool:
-        """Save knowledge base to world_X folder"""
-        world_timestamp = datetime.now().strftime("%d_%m_%Y-%H_%M_%S")
-        self.world_folder = f"world_{world_timestamp}"
-        os.makedirs(self.world_folder, exist_ok=True)
+    def save_knowledge_base(self, kb: Dict[str, Any], folder: str = None) -> bool:
+        """Save knowledge base to specified folder"""
+        target_folder = folder or self.output_folder
+        
+        if target_folder:
+            os.makedirs(target_folder, exist_ok=True)
+            self.world_folder = target_folder
+            print(f"\nSaving knowledge base to {target_folder}...")
+        else:
+            world_timestamp = datetime.now().strftime("%d_%m_%Y-%H_%M_%S")
+            target_folder = f"world_{world_timestamp}"
+            os.makedirs(target_folder, exist_ok=True)
+            self.world_folder = target_folder
+            print(f"\nSaving knowledge base to {target_folder}...")
         
         success = True
         
-        if not self._save_json(kb, os.path.join(self.world_folder, "knowledge_base.json")):
+        if not self._save_json(kb, os.path.join(target_folder, "knowledge_base.json")):
             success = False
         
         components = {
             "characters": "characters",
             "objects": "objects",
             "scenes": "scenes",
-            "rules": "rules"
+            "rules": "rules",
+            "action_catalog": "action_catalog"
         }
         
         for key, filename in components.items():
             if key in kb:
-                data = {key: kb[key]}
-                if not self._save_json(data, os.path.join(self.world_folder, f"{filename}.json")):
+                if key == "action_catalog":
+                    data = {"action_catalog": kb["action_catalog"]}
+                else:
+                    data = {key: kb[key]}
+                if not self._save_json(data, os.path.join(target_folder, f"{filename}.json")):
                     success = False
         
-        # Save world_states.json with wrapper
         if 'world_states' in kb:
             world_data = {"world_states": kb["world_states"]}
-            if not self._save_json(world_data, os.path.join(self.world_folder, "world_states.json")):
+            if not self._save_json(world_data, os.path.join(target_folder, "world_states.json")):
                 success = False
         
         if success:
-            print(f"[OK] Saved knowledge base to {self.world_folder}")
+            print(f"[OK] Saved knowledge base to {target_folder}")
         else:
             print("[ERROR] Some files failed to save")
         
@@ -623,39 +637,58 @@ class KnowledgeBaseGenerator:
             print(f"  [ERROR] Error saving to {filepath}: {e}")
             return False
 
+
+# ==========================================
+# MAIN
+# ==========================================
+
 def main():
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='SWM Knowledge Base Generator')
+    parser.add_argument('--folder', type=str, help='Output folder name (e.g., world_centralized)')
+    parser.add_argument('--characters', type=int, default=8, help='Number of characters to generate (default: 8)')
+    parser.add_argument('--objects', type=int, default=15, help='Number of objects to generate (default: 15)')
+    parser.add_argument('--no-scene', action='store_true', help='Do not generate a scene')
+    parser.add_argument('--no-rules', action='store_true', help='Do not generate rules')
+    args = parser.parse_args()
+    
     print("="*70)
     print("KNOWLEDGE BASE GENERATOR")
-    print("(Everything from generation_config.json)")
+    if args.folder:
+        print(f"Output folder: {args.folder}")
+    else:
+        print("Output folder: world_<timestamp> (default)")
     print("="*70)
     
-    generator = KnowledgeBaseGenerator()
+    generator = KnowledgeBaseGenerator(output_folder=args.folder)
     
     print("\n" + "="*70)
     print("GENERATING KNOWLEDGE BASE")
     print("="*70)
     
     kb = generator.generate_knowledge_base(
-        num_characters=8,
-        num_objects=15,
-        generate_scene=True,
-        generate_rules=True
+        num_characters=args.characters,
+        num_objects=args.objects,
+        generate_scene=not args.no_scene,
+        generate_rules=not args.no_rules
     )
     
     print("\n" + "="*70)
     print("SAVING KNOWLEDGE BASE")
     print("="*70)
-    generator.save_knowledge_base(kb)
+    generator.save_knowledge_base(kb, args.folder)
     
     print("\n" + "="*70)
     print("GENERATED FILES:")
-    print(f"  - {generator.world_folder}/knowledge_base.json (combined)")
-    print(f"  - {generator.world_folder}/characters.json")
-    print(f"  - {generator.world_folder}/objects.json")
-    print(f"  - {generator.world_folder}/scenes.json")
-    print(f"  - {generator.world_folder}/rules.json")
-    print(f"  - {generator.world_folder}/world_states.json")
-    print(f"  - {generator.world_folder}/action_catalog.json")
+    target = args.folder or generator.world_folder
+    print(f"  - {target}/knowledge_base.json (combined)")
+    print(f"  - {target}/characters.json")
+    print(f"  - {target}/objects.json")
+    print(f"  - {target}/scenes.json")
+    print(f"  - {target}/rules.json")
+    print(f"  - {target}/world_states.json")
+    print(f"  - {target}/action_catalog.json")
     print("="*70)
     print("\n[OK] Generation complete")
 
