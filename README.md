@@ -44,7 +44,7 @@ python swm_run_server.py --new
 ```
 Clients can connect now, through:
 ```
-python swm_run_client.py --new
+python swm_run_client.py
 ```
 ### P2P mode (Host - Joiner)
 Check connections configuration on the `network_p2p_config.json` and `network_p2p_join_config.json`. By default this is on localhost and port 6000-6002 and 7000 for the signaling server.
