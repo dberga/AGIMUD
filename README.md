@@ -30,6 +30,8 @@ To run the theories of mind, check (and modify as needed) the `reasoning_tests.j
 ```
 python swm_reason.py
 ```
+The `swm.py` and `swm_run.py` world simulations runs epochs including the integration and analysis of behavior, values, governance and belief motors, as well as emotions, goals and action rules.
+
 ## Network Connections
 
 ### Centralized mode (Server - Client)
