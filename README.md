@@ -51,9 +51,19 @@ Check connections configuration on the `network_p2p_config.json` and `network_p2
 
 First copy or generate world to specific folder `world_p2p`:
 ```
+python swm_generate.py --folder world_p2p
+```
+Then host the p2p host:
+```
+python swm_run_p2p.py --host --world world_p2p
+```
+(or directly use)
+```
 python swm_run_p2p.py --host --new
 ```
-Joiner peers can connect now, through:
+
+```
+Then joiner Peers can connect now, through:
 ```
 python swm_run_p2p.py --join --config network_p2p_join_config.json
 ```
