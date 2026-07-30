@@ -10,7 +10,11 @@
   },
   "world": {
     "world_folder": "world_p2p",
-    "sync_interval": 2.0
+    "sync_interval": 2.0,
+    "broadcast_interval": 1
+  },
+  "connection": {
+    "timeout": 5
   },
   "user": {
     "name": "P2P_Player_2",

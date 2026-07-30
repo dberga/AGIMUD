@@ -1,14 +1,59 @@
 #!/usr/bin/env python3
 """
-Simulated World Module - Main class with JSON loading
+Simulated World Module - Main class with JSON loading and reasoning
+All configuration from JSON files, no hardcoding.
+Integrates swm_reason.py, swm_emotion.py, and swm_behavior.py.
 """
 
-from typing import List, Dict, Any, Optional
+import os
+import sys
+import json
+import time
+import re
+import random
+from datetime import datetime
+from typing import List, Dict, Any, Optional, Tuple
+
+# Corpus & Dynamic Entity Imports
 from swm_corpus_loader import SWMCorpusLoader, DynamicEntity, DynamicEntityCollection
+
+# Encapsulated Logic Imports
+from swm_reason import (
+    SocialReasoningEngine, 
+    SchwartzValueMotor, 
+    OstromGovernanceMotor, 
+    MontesSierraBeliefMotor
+)
+from swm_emotion import EmotionManager
+from swm_behavior import BehaviorManager
+
+
+class TeeOutput:
+    """Class to tee output to both console and a file"""
+    def __init__(self, filename: str, mode: str = 'w'):
+        self.terminal = sys.stdout
+        self.log_file = open(filename, mode, encoding='utf-8')
+        self.filename = filename
+        self.buffer = []
+    
+    def write(self, message):
+        self.terminal.write(message)
+        self.log_file.write(message)
+        self.buffer.append(message)
+    
+    def flush(self):
+        self.terminal.flush()
+        self.log_file.flush()
+    
+    def close(self):
+        self.log_file.close()
+    
+    def get_buffer(self):
+        return ''.join(self.buffer)
 
 
 class SimulatedWorldModule:
-    """Main Simulated World Module with JSON loading"""
+    """Main Simulated World Module with JSON loading and reasoning"""
     
     def __init__(self, 
                  characters_file: str = "characters.json",
@@ -16,8 +61,23 @@ class SimulatedWorldModule:
                  scenes_file: str = "scenes.json",
                  rules_file: str = "rules.json",
                  world_states_file: str = "world_states.json",
-                 knowledge_file: str = None):
+                 knowledge_file: str = None,
+                 action_catalog_file: str = None,
+                 character_graph_file: str = None,
+                 condition_registry_file: str = None,
+                 vocab_file: str = "world_vocabulary.json",
+                 reasoning_config: str = None,
+                 log_to_file: bool = True,
+                 log_filename: str = "world_summary.log"):
         """Initialize the Simulated World Module by loading JSON files"""
+        
+        # Setup logging
+        self.log_to_file = log_to_file
+        self.log_filename = log_filename
+        self.tee = None
+        
+        # Load vocabulary
+        self.vocab = self._load_json(vocab_file) if os.path.exists(vocab_file) else {}
         
         # Store raw data collections
         self.corpus_loader = SWMCorpusLoader()
@@ -29,19 +89,125 @@ class SimulatedWorldModule:
         self.rules: DynamicEntityCollection = self.corpus_loader.rules
         self.other_users: DynamicEntityCollection = DynamicEntityCollection("user")
         
-        # Global Elements - use the loaded world states from corpus_loader
+        # Global Elements
         self.world_states = self.corpus_loader.world_states
         self.knowledge_base = DynamicEntity()
         self.sound_graphics = DynamicEntity()
         self.system_rules = DynamicEntity()
         
+        # Determine world folder from file paths
+        self.world_folder = self._extract_world_folder(characters_file)
+        
+        # Setup log file path
+        if self.log_to_file and self.world_folder:
+            self.log_filepath = os.path.join(self.world_folder, self.log_filename)
+        else:
+            self.log_filepath = self.log_filename
+        
+        # Start logging
+        self._start_logging()
+        
         # Load corpora from JSON files
-        self.load_corpora(characters_file, objects_file, scenes_file, rules_file, world_states_file, knowledge_file)
+        self.load_corpora(
+            characters_file, objects_file, scenes_file, rules_file, world_states_file,
+            knowledge_file, action_catalog_file, character_graph_file, condition_registry_file
+        )
+        
+        # Load condition registry from vocab or file
+        self.condition_registry = self.knowledge_base.get('condition_registry', {})
+        if not self.condition_registry:
+            self.condition_registry = self.vocab.get('condition_registry', {})
+        
+        # Initialize Encapsulated Sub-Managers
+        self.emotion_manager = EmotionManager(self.vocab, self.rules)
+        self.behavior_manager = BehaviorManager(self.vocab, self.rules, self.world_states, self.condition_registry)
+        
+        # Initialize Social Reasoning Engine
+        self.reasoning_engine = SocialReasoningEngine(test_file=reasoning_config or "reasoning_tests.json")
+        
+        # Load reasoning configs from rules into knowledge base
+        self._load_reasoning_from_rules()
+        self._load_reasoning_model()
         
         print("[INIT] Simulated World Module initialized")
+        print(f"[INIT] Emotion model loaded with {len(self.emotion_manager.ekman_emotions)} emotions")
+        print(f"[INIT] Condition registry loaded with {len(self.condition_registry)} conditions")
+        print(f"[INIT] Social Reasoning Engine loaded with {len(self.reasoning_engine.test_loader.configurations)} configs")
+        print(f"[INIT] Knowledge base loaded: {len(self.knowledge_base.to_dict())} items")
+        print(f"[INIT] Logging to: {self.log_filepath}")
+    
+    def _extract_world_folder(self, filepath: str) -> Optional[str]:
+        if not filepath:
+            return None
+        dirname = os.path.dirname(filepath)
+        if dirname and os.path.isdir(dirname):
+            return dirname
+        return None
+    
+    def _start_logging(self):
+        if self.log_to_file:
+            log_dir = os.path.dirname(self.log_filepath)
+            if log_dir and not os.path.exists(log_dir):
+                os.makedirs(log_dir, exist_ok=True)
+            self.tee = TeeOutput(self.log_filepath, 'w')
+            self.tee.write("="*70 + "\n")
+            self.tee.write(f"WORLD SUMMARY - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            self.tee.write("="*70 + "\n\n")
+            sys.stdout = self.tee
+    
+    def _stop_logging(self):
+        if self.tee:
+            sys.stdout = self.tee.terminal
+            self.tee.close()
+            self.tee = None
+    
+    def _load_json(self, filepath: str) -> Dict[str, Any]:
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"[WARNING] Failed to load {filepath}: {e}")
+            return {}
+    
+    def _load_reasoning_from_rules(self):
+        reasoning_data = {}
+        for rule in self.rules.get_all():
+            rule_data = rule.to_dict()
+            if rule_data.get('type') == 'reasoning':
+                config_name = rule_data.get('id', 'default')
+                config_dict = {}
+                for key in ['schwartz_weights', 'ostrom_weights', 'ostrom_sanctions', 'beliefs', 
+                            'peer_beliefs', 'discrepancy_flag', 'trust_threshold', 'cooperation_threshold']:
+                    if key in rule_data:
+                        config_dict[key] = rule_data[key]
+                        reasoning_data[key] = rule_data[key]
+                if config_dict:
+                    self.reasoning_engine.configure(**config_dict)
+                    print(f"[OK] Applied reasoning config: {config_name}")
+        if reasoning_data:
+            self.knowledge_base.update({'reasoning_config': reasoning_data})
+    
+    def _load_reasoning_model(self):
+        self.reasoning_configs = {}
+        for rule in self.rules.get_all():
+            rule_data = rule.to_dict()
+            if rule_data.get('type') == 'reasoning':
+                config_id = rule_data.get('id', 'default')
+                self.reasoning_configs[config_id] = {
+                    'schwartz_weights': rule_data.get('schwartz_weights', {}),
+                    'trust_threshold': rule_data.get('trust_threshold', 0.6),
+                    'cooperation_threshold': rule_data.get('cooperation_threshold', 0.5),
+                    'ostrom_weights': rule_data.get('ostrom_weights', {}),
+                    'ostrom_sanctions': rule_data.get('ostrom_sanctions', {}),
+                    'beliefs': rule_data.get('beliefs', {}),
+                    'peer_beliefs': rule_data.get('peer_beliefs', {}),
+                    'discrepancy_flag': rule_data.get('discrepancy_flag', False)
+                }
+        if self.reasoning_configs:
+            first_config = list(self.reasoning_configs.values())[0]
+            self.reasoning_engine.configure(**first_config)
     
     def clear_all(self):
-        """Clear all data collections"""
         self.characters.clear_all()
         self.objects.clear_all()
         self.scenes.clear_all()
@@ -49,281 +215,352 @@ class SimulatedWorldModule:
         self.world_states = DynamicEntity()
         self.knowledge_base = DynamicEntity()
     
-    def load_corpora(self, characters_file: str, objects_file: str, 
-                     scenes_file: str, rules_file: str,
-                     world_states_file: str, knowledge_file: str = None):
-        """Load corpora from JSON files"""
-        self.corpus_loader.load_all(characters_file, objects_file, scenes_file, 
-                                   rules_file, world_states_file, knowledge_file)
+    def load_corpora(self, characters_file: str = "characters.json", objects_file: str = "objects.json",
+                     scenes_file: str = "scenes.json", rules_file: str = "rules.json", world_states_file: str = "world_states.json",
+                     knowledge_file: str = None, action_catalog_file: str = None, character_graph_file: str = None, condition_registry_file: str = None):
+        self.corpus_loader.load_all(characters_file, objects_file, scenes_file, rules_file, world_states_file, knowledge_file)
         
-        # Load knowledge base into dynamic entity
-        if self.corpus_loader.knowledge_base:
+        for file_path in [knowledge_file, action_catalog_file, character_graph_file, condition_registry_file]:
+            if file_path and os.path.exists(file_path):
+                data = self._load_json(file_path)
+                if data:
+                    self.knowledge_base.update(data)
+                    print(f"[OK] Loaded base file: {file_path}")
+        
+        if not self.knowledge_base.to_dict() and self.corpus_loader.knowledge_base:
             self.knowledge_base.update(self.corpus_loader.knowledge_base)
-        
-        # Ensure world_states is properly set
         if not self.world_states.to_dict():
             self.world_states.update(self.corpus_loader.world_states.to_dict())
     
     # GETTERS
-    
-    def get_characters(self) -> List[DynamicEntity]:
-        """Get all characters"""
-        return self.characters.get_all()
-    
-    def get_objects(self) -> List[DynamicEntity]:
-        """Get all objects"""
-        return self.objects.get_all()
-    
-    def get_scenes(self) -> List[DynamicEntity]:
-        """Get all scenes"""
-        return self.scenes.get_all()
-    
-    def get_rules(self) -> List[DynamicEntity]:
-        """Get all rules"""
-        return self.rules.get_all()
-    
-    def get_world_states(self) -> DynamicEntity:
-        """Get world states"""
-        return self.world_states
-    
-    def find_characters(self, **kwargs) -> List[DynamicEntity]:
-        """Find characters matching criteria"""
-        return self.characters.find_entities(**kwargs)
-    
-    def find_objects(self, **kwargs) -> List[DynamicEntity]:
-        """Find objects matching criteria"""
-        return self.objects.find_entities(**kwargs)
-    
-    def get_character_attributes(self) -> List[str]:
-        """Get all character attributes"""
-        return self.characters.get_common_attributes()
-    
-    def get_object_attributes(self) -> List[str]:
-        """Get all object attributes"""
-        return self.objects.get_common_attributes()
-    
-    def get_scene_attributes(self) -> List[str]:
-        """Get all scene attributes"""
-        return self.scenes.get_common_attributes()
-    
-    def get_rule_attributes(self) -> List[str]:
-        """Get all rule attributes"""
-        return self.rules.get_common_attributes()
+    def get_characters(self) -> List[DynamicEntity]: return self.characters.get_all()
+    def get_characters_dict(self) -> List[Dict[str, Any]]: return [c.to_dict() for c in self.characters.get_all()]
+    def get_objects(self) -> List[DynamicEntity]: return self.objects.get_all()
+    def get_objects_dict(self) -> List[Dict[str, Any]]: return [o.to_dict() for o in self.objects.get_all()]
+    def get_scenes(self) -> List[DynamicEntity]: return self.scenes.get_all()
+    def get_rules(self) -> List[DynamicEntity]: return self.rules.get_all()
+    def get_world_states(self) -> DynamicEntity: return self.world_states
     
     # WORLD STATE MANAGEMENT
-    
     def get_world_state(self, key: str, default: Any = None) -> Any:
-        """Get a world state value"""
         return self.world_states.get(key, default)
     
     def set_world_state(self, key: str, value: Any) -> None:
-        """Set a world state value"""
         self.world_states.set(key, value)
     
     def get_global_flag(self, flag_name: str, default: bool = False) -> bool:
-        """Get a persistent flag value"""
         flags = self.world_states.get("persistent_flags", {})
         return flags.get(flag_name, default)
     
     def set_global_flag(self, flag_name: str, value: bool) -> None:
-        """Set a persistent flag value"""
         flags = self.world_states.get("persistent_flags", {})
         flags[flag_name] = value
         self.world_states.set("persistent_flags", flags)
     
-    # VISUALIZATION METHODS
+    # DELEGATED EMOTION METHODS
+    def get_character_emotion(self, char: DynamicEntity) -> str:
+        return self.emotion_manager.get_character_emotion(char)
+    def set_character_emotion(self, char: DynamicEntity, emotion: str, intensity: float = 0.5):
+        self.emotion_manager.set_character_emotion(char, emotion, intensity)
+    def compute_emotion_from_appraisal(self, char: DynamicEntity, event_type: str) -> Tuple[str, float]:
+        return self.emotion_manager.compute_emotion_from_appraisal(char, event_type)
+    def get_emotion_action_tendency(self, emotion: str) -> str:
+        return self.emotion_manager.get_emotion_action_tendency(emotion)
+    def get_emotion_arousal(self, emotion: str) -> str:
+        return self.emotion_manager.get_emotion_arousal(emotion)
     
-    def print_knowledge_base(self):
-        """Print the knowledge base"""
+    # DELEGATED BEHAVIOR METHODS
+    def get_behavior_graph(self, char: DynamicEntity) -> Dict[str, Any]:
+        return self.behavior_manager.get_behavior_graph(char)
+    def get_behavior_state(self, char: DynamicEntity) -> str:
+        return self.behavior_manager.get_behavior_state(char)
+    def set_behavior_state(self, char: DynamicEntity, state: str):
+        self.behavior_manager.set_behavior_state(char, state)
+    def get_possible_transitions(self, char: DynamicEntity) -> List[Dict[str, Any]]:
+        return self.behavior_manager.get_possible_transitions(char)
+    def evaluate_condition(self, condition: str, char: DynamicEntity, status: Dict, flags: Dict) -> bool:
+        return self.behavior_manager.evaluate_condition(condition, char, status, flags)
+    def select_next_behavior_state(self, char: DynamicEntity) -> Optional[str]:
+        return self.behavior_manager.select_next_behavior_state(char)
+    
+    # REASONING STACK METHODS
+    def get_reasoning_stack(self, char: DynamicEntity) -> Dict[str, Any]:
+        memory = char.get('memory_perception', {})
+        return memory.get('reasoning_stack', {})
+    
+    def update_reasoning_stack(self, char: DynamicEntity, updates: Dict[str, Any]):
+        memory = char.get('memory_perception', {})
+        reasoning = memory.get('reasoning_stack', {})
+        reasoning.update(updates)
+        memory['reasoning_stack'] = reasoning
+        char.set('memory_perception', memory)
+    
+    def get_current_goal(self, char: DynamicEntity) -> str:
+        return self.get_reasoning_stack(char).get('current_goal', 'survival')
+    
+    def update_goal_based_on_status(self, char: DynamicEntity):
+        status = char.get('status_variables', {})
+        reasoning = self.get_reasoning_stack(char)
+        if not status: return
+        
+        goal_hierarchy = self.vocab.get('goal_hierarchy', {
+            'survival': {'triggers': ['hunger > 70', 'thirst > 70', 'health < 30', 'stamina < 30'], 'priority': 1},
+            'social_belonging': {'triggers': ['morale < 30', 'emotional_state == joy'], 'priority': 2},
+            'exploration': {'triggers': ['emotional_state == surprise', 'stamina > 70'], 'priority': 3}
+        })
+        flags = self.world_states.get('persistent_flags', {})
+        best_goal = reasoning.get('current_goal', 'survival')
+        best_priority = float('inf')
+        
+        for goal, config in goal_hierarchy.items():
+            triggers = config.get('triggers', [])
+            priority = config.get('priority', 10)
+            if any(self.evaluate_condition(t, char, status, flags) for t in triggers) and priority < best_priority:
+                best_priority = priority
+                best_goal = goal
+        
+        if best_goal != reasoning.get('current_goal'):
+            self.update_reasoning_stack(char, {'current_goal': best_goal})
+    
+    # SOCIAL REASONING METHODS
+    def get_action_catalog(self) -> List[str]:
+        return self.knowledge_base.get('action_catalog', [])
+    
+    def get_reasoning_config(self) -> Dict[str, Any]:
+        return self.knowledge_base.get('reasoning_config', {})
+    
+    def validate_action(self, action: str) -> bool:
+        catalog = self.get_action_catalog()
+        return action in catalog if catalog else True
+    
+    def schwartz_evaluate_motivation(self, char: DynamicEntity, action: str) -> float:
+        social_attrs = char.get('social_attributes', {})
+        schwartz_values = social_attrs.get('schwartz_values', {})
+        motor = SchwartzValueMotor()
+        if schwartz_values:
+            motor.motivational_weights.update(schwartz_values)
+        return motor.evaluate_motivation(action)
+    
+    def ostrom_compute_normative_utility(self, char: DynamicEntity, action: str) -> float:
+        motor = OstromGovernanceMotor()
+        reasoning_config = self.get_reasoning_config()
+        if 'ostrom_weights' in reasoning_config:
+            motor.institutional_weights = reasoning_config['ostrom_weights']
+        if 'ostrom_sanctions' in reasoning_config:
+            motor.sanction_probabilities = reasoning_config['ostrom_sanctions']
+        compliance_scores = {"rule_1": 1.0, "rule_2": 1.0}
+        return motor.compute_normative_utility(action, compliance_scores)
+    
+    def montes_sierra_compute_deception_penalty(self, char: DynamicEntity) -> float:
+        motor = MontesSierraBeliefMotor()
+        reasoning_config = self.get_reasoning_config()
+        if 'beliefs' in reasoning_config:
+            motor.first_order_beliefs = reasoning_config['beliefs']
+        if 'peer_beliefs' in reasoning_config:
+            motor.inferred_peer_beliefs = reasoning_config['peer_beliefs']
+        if 'discrepancy_flag' in reasoning_config:
+            motor.communication_discrepancy_flag = reasoning_config['discrepancy_flag']
+        return motor.compute_deception_penalty()
+    
+    def compute_shapley_coalition(self, char: DynamicEntity, allies: List[str]) -> float:
+        if not allies: return 0.0
+        total = sum(self.get_trust_score(char.get('name', ''), ally) for ally in allies)
+        return total / len(allies) if allies else 0.0
+    
+    def get_trust_score(self, char1: str, char2: str) -> float:
+        relationship = self.get_relationship_between(char1, char2)
+        return relationship.get('trust', 0.5) if relationship else 0.5
+    
+    def get_relationship_between(self, char1: str, char2: str) -> Optional[Dict[str, Any]]:
+        graph = self.get_character_relationship_graph()
+        for edge in graph.get('edges', []):
+            if (edge.get('from') == char1 and edge.get('to') == char2) or \
+               (edge.get('from') == char2 and edge.get('to') == char1):
+                return edge
+        return None
+    
+    def get_character_relationship_graph(self) -> Dict[str, Any]:
+        return self.knowledge_base.get('character_graph', {'nodes': [], 'edges': []})
+
+    def print_characters_summary(self):
         print("\n" + "="*70)
-        print("KNOWLEDGE BASE")
+        print("CHARACTERS SUMMARY")
         print("="*70)
-        
-        kb_data = self.knowledge_base.to_dict()
-        if kb_data:
-            for key, value in kb_data.items():
-                if isinstance(value, dict):
-                    print(f"\n[{key.upper()}]")
-                    for subkey, subvalue in value.items():
-                        if isinstance(subvalue, dict):
-                            print(f"  {subkey}: {{...}}")
-                        elif isinstance(subvalue, list):
-                            print(f"  {subkey}: [{len(subvalue)} items]")
-                        else:
-                            print(f"  {subkey}: {subvalue}")
-                else:
-                    print(f"\n[{key.upper()}]: {value}")
-        else:
-            print("  (No knowledge base data loaded)")
-        
+        chars = self.characters.get_all()
+        if not chars:
+            print("  No characters loaded.")
+            return
+        for char in chars:
+            name = char.get('name', 'Unknown')
+            emotion = self.get_character_emotion(char)
+            state = char.get('ai_state', 'IDLE')
+            status = char.get('status_variables', {})
+            health = status.get('health', '?')
+            stamina = status.get('stamina', '?')
+            morale = status.get('morale', '?')
+            faction = char.get('social_attributes', {}).get('faction', 'Unknown')
+            print(f"\n  {name} [{state}]")
+            print(f"    Emotion: {emotion} | Health: {health} | Stamina: {stamina} | Morale: {morale}")
+            print(f"    Faction: {faction}")
         print("="*70)
-    
-    def print_world_states(self):
-        """Print the world states"""
+
+    def print_objects_summary(self):
         print("\n" + "="*70)
-        print("WORLD STATES")
+        print("OBJECTS SUMMARY")
         print("="*70)
-        
-        ws = self.world_states.to_dict()
-        if ws:
-            for key, value in ws.items():
-                if key == "persistent_flags" and isinstance(value, dict):
-                    print(f"\n[PERSISTENT FLAGS]")
-                    for flag, flag_value in value.items():
-                        print(f"  {flag}: {flag_value}")
-                elif key == "scene_states" and isinstance(value, dict):
-                    print(f"\n[SCENE STATES]")
-                    for scene, scene_value in value.items():
-                        print(f"  {scene}: {scene_value}")
-                elif key == "object_states" and isinstance(value, dict):
-                    print(f"\n[OBJECT STATES]")
-                    for obj_id, obj_state in value.items():
-                        print(f"  {obj_id}: {obj_state}")
-                elif key == "global_timers" and isinstance(value, dict):
-                    print(f"\n[GLOBAL TIMERS]")
-                    for timer, timer_value in value.items():
-                        print(f"  {timer}: {timer_value}")
-                elif key == "global_states" and isinstance(value, dict):
-                    print(f"\n[GLOBAL STATES]")
-                    for state, state_value in value.items():
-                        print(f"  {state}: {state_value}")
-                else:
-                    if not isinstance(value, dict):
-                        print(f"\n[{key.upper()}]: {value}")
-        else:
-            print("  (No world states loaded)")
-        
+        objs = self.objects.get_all()
+        if not objs:
+            print("  No objects loaded.")
+            return
+        for obj in objs:
+            name = obj.get('name', 'Unknown')
+            obj_vars = obj.get('object_variables', {})
+            durability = obj_vars.get('durability', '?')
+            value = obj_vars.get('value', '?')
+            print(f"\n  {name}")
+            print(f"    Durability: {durability} | Value: {value}")
         print("="*70)
-    
-    def print_rules(self):
-        """Print all rules"""
-        print("\n" + "="*70)
-        print("SYSTEM RULES")
-        print("="*70)
-        
-        if self.rules.count() == 0:
-            print("  No rules loaded.")
-        else:
-            for i, rule in enumerate(self.rules.get_all(), 1):
-                rule_data = rule.to_dict()
-                print(f"\n[RULE {i}] {rule_data.get('name', 'Unnamed')}")
-                print(f"  Type: {rule_data.get('type', 'N/A')}")
-                print(f"  Description: {rule_data.get('description', 'N/A')}")
-                
-                if 'conditions' in rule_data:
-                    print(f"  Conditions: {len(rule_data['conditions'])}")
-                    for cond in rule_data['conditions'][:3]:
-                        print(f"    - {cond}")
-                
-                if 'effects' in rule_data:
-                    print(f"  Effects: {len(rule_data['effects'])}")
-                    for effect in rule_data['effects'][:3]:
-                        print(f"    - {effect}")
-        
-        print("="*70)
-    
+
     def print_corpus_summary(self):
-        """Print summary of all loaded corpora"""
         self.corpus_loader.print_corpus_summary()
-    
-    def print_scene_diagram(self):
-        """Print a simple ASCII diagram of the current scene"""
+
+    def print_emotion_summary(self):
         print("\n" + "="*70)
-        print("SCENE DIAGRAM")
+        print("EMOTION SUMMARY (Ekman Model)")
         print("="*70)
+        emotion_counts = {e: 0 for e in self.emotion_manager.ekman_emotions}
+        total = 0
+        for char in self.characters.get_all():
+            emotion = self.get_character_emotion(char)
+            if emotion in emotion_counts:
+                emotion_counts[emotion] += 1
+                total += 1
         
-        scene_data = None
-        if self.scenes.count() > 0:
-            scene_data = self.scenes.get_entity(0)
-        
-        if scene_data:
-            print(f"\n  Current Scene: {scene_data.get('current_scene', 'Unknown')}")
-            
-            waypoints = scene_data.get('waypoints', [])
-            if waypoints:
-                grid_size = 10
-                grid = [['.' for _ in range(grid_size)] for _ in range(grid_size)]
-                
-                for i, wp in enumerate(waypoints[:5]):
-                    if isinstance(wp, dict):
-                        x = int(abs(wp.get('x', 0)) % grid_size)
-                        y = int(abs(wp.get('y', 0)) % grid_size)
-                        if 0 <= x < grid_size and 0 <= y < grid_size:
-                            grid[y][x] = str(i + 1) if i < 9 else 'W'
-                    elif isinstance(wp, (list, tuple)) and len(wp) >= 2:
-                        x = int(abs(wp[0]) % grid_size)
-                        y = int(abs(wp[1]) % grid_size)
-                        if 0 <= x < grid_size and 0 <= y < grid_size:
-                            grid[y][x] = str(i + 1) if i < 9 else 'W'
-                
-                print("\n  Scene Map:")
-                for row in grid:
-                    print("    " + " ".join(row))
+        print(f"\n  Total Characters: {total}")
+        print("\n  Emotion Distribution:")
+        for emotion, count in emotion_counts.items():
+            if count > 0:
+                bar = "=" * int((count / max(1, total)) * 50)
+                print(f"    {emotion:10} {bar} {count}")
             else:
-                print("  (No waypoints defined)")
-            
-            zones = scene_data.get('zones', [])
-            if zones:
-                print("\n  Zones:")
-                for zone in zones[:3]:
-                    if isinstance(zone, dict):
-                        name = zone.get('name', 'Unknown')
-                        zone_type = zone.get('zone_type', 'N/A')
-                        print(f"    - {name} ({zone_type})")
-        else:
-            print("  (No scene data loaded)")
-        
-        print("\n" + "="*70)
-    
-    def print_entity_hierarchy(self):
-        """Print the entity hierarchy"""
-        print("\n" + "="*70)
-        print("ENTITY HIERARCHY")
+                print(f"    {emotion:10} {0}")
         print("="*70)
-        
-        char_count = self.characters.count()
-        user_count = self.other_users.count()
-        obj_count = self.objects.count()
-        rule_count = self.rules.count()
-        
-        print(f"""
-  +-------------------------------------+
-  |     SIMULATED WORLD HIERARCHY       |
-  +-------------------------------------+
-  |                                     |
-  |  Game Entities                      |
-  |  +-- Characters: {char_count:>3}                    |
-  |  +-- Other Users: {user_count:>3}                    |
-  |  +-- Objects: {obj_count:>3}                      |
-  |  +-- Scenes: {self.scenes.count():>3}                      |
-  |  +-- Rules: {rule_count:>3}                       |
-  |                                     |
-  |  Global Elements                    |
-  |  +-- World States                   |
-  |  +-- Knowledge Base                 |
-  |  +-- Sound and Graphics             |
-  |  +-- System Rules                   |
-  |                                     |
-  +-------------------------------------+
-  |  Total Entities: {char_count + user_count + obj_count + rule_count:>3}       |
-  +-------------------------------------+
-        """)
-    
+
+    def print_reasoning_summary(self):
+        print("\n" + "="*70)
+        print("SOCIAL REASONING SUMMARY")
+        print("="*70)
+        reasoning_config = self.get_reasoning_config()
+        schwartz = reasoning_config.get('schwartz_weights', {})
+        if schwartz:
+            for key, value in schwartz.items():
+                bar = "=" * int(value * 10)
+                print(f"  {key:15} [{value:.1f}] {bar}")
+        print("="*70)
+
+    def print_action_catalog(self):
+        print("\n" + "="*70)
+        print("ACTION CATALOG")
+        print("="*70)
+        catalog = self.get_action_catalog()
+        if catalog:
+            for i, action in enumerate(catalog, 1):
+                print(f"  {i}. {action}")
+        else:
+            print("  (No action catalog loaded)")
+        print("="*70)
+
     def visualize_all(self):
-        """Run all visualizations"""
         self.print_corpus_summary()
-        self.print_scene_diagram()
-        self.print_rules()
-        self.print_world_states()
-        self.print_entity_hierarchy()
-        self.print_knowledge_base()
+        self.print_characters_summary()
+        self.print_objects_summary()
+        self.print_action_catalog()
+        self.print_emotion_summary()
+        self.print_reasoning_summary()
+
+    def close(self):
+        self._stop_logging()
 
 
 # ==========================================
-# MAIN
+# MAIN - Direct Execution Block
 # ==========================================
+
+def main():
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Simulated World Module')
+    parser.add_argument('--world', type=str, help='World folder to load')
+    parser.add_argument('--characters', type=str, help='Characters file path')
+    parser.add_argument('--objects', type=str, help='Objects file path')
+    parser.add_argument('--scenes', type=str, help='Scenes file path')
+    parser.add_argument('--rules', type=str, help='Rules file path')
+    parser.add_argument('--world-states', type=str, help='World states file path')
+    parser.add_argument('--knowledge', type=str, help='Knowledge base file path')
+    parser.add_argument('--action-catalog', type=str, help='Action catalog file path')
+    parser.add_argument('--character-graph', type=str, help='Character graph file path')
+    parser.add_argument('--condition-registry', type=str, help='Condition registry file path')
+    parser.add_argument('--vocab', type=str, default='world_vocabulary.json', help='Vocabulary file')
+    parser.add_argument('--reasoning', type=str, default='reasoning_tests.json', help='Reasoning tests file')
+    parser.add_argument('--no-viz', action='store_true', help='Skip visualization')
+    parser.add_argument('--summary', action='store_true', help='Print summary only')
+    parser.add_argument('--no-log', action='store_true', help='Disable logging to file')
+    parser.add_argument('--log-filename', type=str, default='world_summary.log', help='Log filename')
+    args = parser.parse_args()
+    
+    if args.world:
+        base = args.world
+        characters_file = os.path.join(base, "characters.json")
+        objects_file = os.path.join(base, "objects.json")
+        scenes_file = os.path.join(base, "scenes.json")
+        rules_file = os.path.join(base, "rules.json")
+        world_states_file = os.path.join(base, "world_states.json")
+        knowledge_file = os.path.join(base, "knowledge_base.json")
+        action_catalog_file = os.path.join(base, "action_catalog.json")
+        character_graph_file = os.path.join(base, "character_graph.json")
+        condition_registry_file = os.path.join(base, "condition_registry.json")
+    else:
+        characters_file = args.characters or "characters.json"
+        objects_file = args.objects or "objects.json"
+        scenes_file = args.scenes or "scenes.json"
+        rules_file = args.rules or "rules.json"
+        world_states_file = args.world_states or "world_states.json"
+        knowledge_file = args.knowledge or "knowledge_base.json"
+        action_catalog_file = args.action_catalog or "action_catalog.json"
+        character_graph_file = args.character_graph or "character_graph.json"
+        condition_registry_file = args.condition_registry or "condition_registry.json"
+    
+    print("Creating Simulated World...")
+    
+    world = SimulatedWorldModule(
+        characters_file=characters_file,
+        objects_file=objects_file,
+        scenes_file=scenes_file,
+        rules_file=rules_file,
+        world_states_file=world_states_file,
+        knowledge_file=knowledge_file,
+        action_catalog_file=action_catalog_file,
+        character_graph_file=character_graph_file,
+        condition_registry_file=condition_registry_file,
+        vocab_file=args.vocab,
+        reasoning_config=args.reasoning,
+        log_to_file=not args.no_log,
+        log_filename=args.log_filename
+    )
+    
+    try:
+        if args.summary:
+            world.print_corpus_summary()
+            world.print_reasoning_summary()
+            world.print_action_catalog()
+        elif not args.no_viz:
+            world.visualize_all()
+    finally:
+        world.close()
+    
+    if not args.no_log and world.log_filepath:
+        print(f"\n[OK] Summary saved to: {world.log_filepath}")
+
 
 if __name__ == "__main__":
-    print("Creating Simulated World...")
-    world = SimulatedWorldModule()
-    world.visualize_all()
+    main()

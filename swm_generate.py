@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 SWM Knowledge Base Generator - Generate new JSON knowledge bases from name files and templates
+All configuration from JSON, no hardcoding
 """
 
 import json
 import os
 import random
 import time
-import re
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 from copy import deepcopy
 from datetime import datetime
 
@@ -84,7 +84,12 @@ class TemplateEngine:
             
             relationships = {}
             for name in selected:
-                relationships[name] = random.randint(0, 100)
+                # Use weighted random for relationship values (0-100)
+                relationship_value = random.choices(
+                    population=[random.randint(0, 30), random.randint(31, 70), random.randint(71, 100)],
+                    weights=[0.2, 0.5, 0.3]
+                )[0]
+                relationships[name] = relationship_value
             return relationships
         
         elif spec_type == 'random_region_name':
@@ -161,7 +166,7 @@ class TemplateEngine:
         return current
     
     def _generate_zones(self, spec: Dict[str, Any], context: Dict[str, Any]) -> List[Dict]:
-        """Generate zones from template"""
+        """Generate zones from template with connections"""
         count_spec = spec.get('count', {'min': 2, 'max': 6})
         count = self.resolve(count_spec, context)
         if count is None:
@@ -186,6 +191,12 @@ class TemplateEngine:
                         zone[key] = value
             zones.append(zone)
             zone_ids.append(zone.get('zone_id', f'ZONE_{i+1:03d}'))
+        
+        # Add zone names from locations
+        location_names = self.generator._get_vocab('locations', ['Unknown'])
+        for i, zone in enumerate(zones):
+            if 'name' not in zone or zone['name'] is None:
+                zone['name'] = random.choice(location_names) if location_names else f"Zone_{i+1}"
         
         context['zone_ids'] = zone_ids
         context['zones'] = zones
@@ -334,10 +345,15 @@ class KnowledgeBaseGenerator:
         self.template_engine = TemplateEngine(self)
         self.output_folder = output_folder
         self.world_folder = None
+        
+        # Load condition registry from vocab
+        self.condition_registry = self.vocab.get('condition_registry', {})
+        
         print("[OK] Knowledge Base Generator initialized")
         print(f"  Loaded {len(self.character_names)} character names")
         print(f"  Loaded {len(self.object_names)} object names")
         print(f"  Loaded {len(self.scene_names)} scene names")
+        print(f"  Loaded {len(self.condition_registry)} conditions from registry")
     
     def _load_config(self, config_file: str) -> Dict[str, Any]:
         """Load configuration from JSON"""
@@ -405,11 +421,14 @@ class KnowledgeBaseGenerator:
             try:
                 with open("world_vocabulary.json", 'r', encoding='utf-8') as f:
                     self._vocab_cache = json.load(f)
+                self.vocab = self._vocab_cache
                 print("[OK] Loaded vocabulary from world_vocabulary.json")
             except Exception as e:
                 print(f"[WARNING] Failed to load world_vocabulary.json: {e}")
+                self.vocab = {}
         else:
             print("[WARNING] world_vocabulary.json not found")
+            self.vocab = {}
     
     def _get_vocab(self, key: str, default: list = None) -> list:
         """Get a vocabulary list from world_vocabulary.json"""
@@ -425,6 +444,152 @@ class KnowledgeBaseGenerator:
         
         return self._vocab_cache.get(key, default)
     
+    def _generate_behavior_graph(self, character_name: str) -> Dict[str, Any]:
+        """Generate a behavior graph for a character based on config"""
+        # Get behavior graph from rules template
+        rules_template = self.config.get('rules_template', [])
+        behavior_graph = None
+        
+        for rule in rules_template:
+            if rule.get('type') == 'behavior_graph':
+                behavior_graph = {
+                    'nodes': rule.get('graph_nodes', []),
+                    'edges': rule.get('graph_edges', [])
+                }
+                break
+        
+        # If no behavior graph in rules, use default
+        if not behavior_graph:
+            behavior_graph = {
+                "nodes": [
+                    {"id": "idle", "type": "state", "priority": 0, "description": "Default resting state"},
+                    {"id": "explore", "type": "state", "priority": 1, "description": "Exploring the environment"},
+                    {"id": "socialize", "type": "state", "priority": 2, "description": "Interacting with others"},
+                    {"id": "gather", "type": "state", "priority": 3, "description": "Gathering resources"},
+                    {"id": "combat", "type": "state", "priority": 4, "description": "Engaging in combat"},
+                    {"id": "rest", "type": "state", "priority": 0, "description": "Resting to recover"},
+                    {"id": "flee", "type": "state", "priority": 0, "description": "Fleeing from danger"},
+                    {"id": "share", "type": "state", "priority": 2, "description": "Sharing with allies"}
+                ],
+                "edges": [
+                    {"from": "idle", "to": "explore", "weight": 0.3, "condition": "stamina > 50 AND emotional_state != sadness AND emotional_state != fear"},
+                    {"from": "idle", "to": "socialize", "weight": 0.2, "condition": "morale > 40 AND emotional_state == joy"},
+                    {"from": "idle", "to": "rest", "weight": 0.5, "condition": "stamina < 30 OR emotional_state == sadness"},
+                    {"from": "explore", "to": "gather", "weight": 0.4, "condition": "hunger > 50 OR thirst > 50"},
+                    {"from": "explore", "to": "combat", "weight": 0.15, "condition": "health > 60 AND emotional_state == anger AND enemy_nearby"},
+                    {"from": "explore", "to": "idle", "weight": 0.3, "condition": "stamina < 40"},
+                    {"from": "socialize", "to": "gather", "weight": 0.3, "condition": "has_allies AND cooperativeness > 0.6"},
+                    {"from": "socialize", "to": "share", "weight": 0.2, "condition": "has_allies AND benevolence > 0.7"},
+                    {"from": "socialize", "to": "idle", "weight": 0.4, "condition": "true"},
+                    {"from": "gather", "to": "share", "weight": 0.2, "condition": "resources_excess AND cooperativeness > 0.5"},
+                    {"from": "gather", "to": "idle", "weight": 0.3, "condition": "true"},
+                    {"from": "gather", "to": "combat", "weight": 0.25, "condition": "enemy_nearby AND emotional_state == anger"},
+                    {"from": "combat", "to": "flee", "weight": 0.3, "condition": "health < 30 OR emotional_state == fear"},
+                    {"from": "combat", "to": "idle", "weight": 0.3, "condition": "enemy_defeated"},
+                    {"from": "combat", "to": "rest", "weight": 0.2, "condition": "stamina < 20"},
+                    {"from": "rest", "to": "idle", "weight": 0.7, "condition": "stamina > 80 AND emotional_state != sadness"},
+                    {"from": "rest", "to": "socialize", "weight": 0.1, "condition": "morale < 30 AND emotional_state == sadness"},
+                    {"from": "flee", "to": "rest", "weight": 0.5, "condition": "stamina < 30"},
+                    {"from": "flee", "to": "idle", "weight": 0.5, "condition": "safe"},
+                    {"from": "share", "to": "socialize", "weight": 0.5, "condition": "true"},
+                    {"from": "share", "to": "idle", "weight": 0.3, "condition": "stamina < 40"}
+                ],
+                "transition_rules": [
+                    {"from": "idle", "to": "gather", "weight": 0.3, "condition": "(hunger > 60 OR thirst > 60) AND stamina > 40"},
+                    {"from": "idle", "to": "flee", "weight": 0.8, "condition": "emotional_state == fear AND threat_nearby"},
+                    {"from": "idle", "to": "combat", "weight": 0.7, "condition": "emotional_state == anger AND enemy_nearby"},
+                    {"from": "socialize", "to": "combat", "weight": 0.15, "condition": "ally_attacked AND emotional_state == anger"},
+                    {"from": "rest", "to": "explore", "weight": 0.3, "condition": "stamina > 70 AND emotional_state != sadness"},
+                    {"from": "explore", "to": "socialize", "weight": 0.2, "condition": "emotional_state == joy AND morale > 60"},
+                    {"from": "gather", "to": "share", "weight": 0.25, "condition": "resources_excess AND cooperativeness > 0.6"},
+                    {"from": "share", "to": "socialize", "weight": 0.6, "condition": "morale > 50 AND emotional_state == joy"}
+                ]
+            }
+        
+        return behavior_graph
+    
+    def _generate_character_graphs(self, characters: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Generate character relationship graph"""
+        graph = {
+            "nodes": [],
+            "edges": []
+        }
+        
+        # Add all characters as nodes
+        for char in characters:
+            name = char.get('name', 'Unknown')
+            faction = char.get('social_attributes', {}).get('faction', 'Unknown')
+            alignment = char.get('social_attributes', {}).get('alignment', 'Unknown')
+            
+            # Get Schwartz values
+            schwartz = char.get('social_attributes', {}).get('schwartz_values', {})
+            
+            graph["nodes"].append({
+                "id": name,
+                "type": "character",
+                "faction": faction,
+                "alignment": alignment,
+                "schwartz_values": schwartz
+            })
+        
+        # Generate edges based on factions and random relationships
+        for i, char1 in enumerate(characters):
+            name1 = char1.get('name', 'Unknown')
+            faction1 = char1.get('social_attributes', {}).get('faction', 'Unknown')
+            schwartz1 = char1.get('social_attributes', {}).get('schwartz_values', {})
+            
+            for j, char2 in enumerate(characters):
+                if i >= j:
+                    continue
+                
+                name2 = char2.get('name', 'Unknown')
+                faction2 = char2.get('social_attributes', {}).get('faction', 'Unknown')
+                schwartz2 = char2.get('social_attributes', {}).get('schwartz_values', {})
+                
+                # Calculate similarity based on Schwartz values (if available)
+                similarity = 0.5
+                if schwartz1 and schwartz2:
+                    common_values = set(schwartz1.keys()) & set(schwartz2.keys())
+                    if common_values:
+                        diff_sum = sum(abs(schwartz1.get(v, 0) - schwartz2.get(v, 0)) for v in common_values)
+                        similarity = 1.0 - (diff_sum / (len(common_values) * 2))
+                
+                # Same faction: higher chance of positive relationship
+                if faction1 == faction2:
+                    weight = random.uniform(0.5, 0.9) * similarity
+                    relationship_type = random.choices(
+                        ['ally', 'friend', 'neutral', 'rival'],
+                        weights=[0.3, 0.4, 0.2, 0.1]
+                    )[0]
+                else:
+                    weight = random.uniform(0.1, 0.7) * similarity
+                    relationship_type = random.choices(
+                        ['neutral', 'rival', 'enemy', 'ally'],
+                        weights=[0.3, 0.3, 0.2, 0.2]
+                    )[0]
+                
+                # Calculate trust based on similarity and relationship type
+                trust_base = {
+                    'ally': 0.8,
+                    'friend': 0.7,
+                    'neutral': 0.5,
+                    'rival': 0.3,
+                    'enemy': 0.1
+                }.get(relationship_type, 0.5)
+                
+                trust = round((trust_base * 0.7 + similarity * 0.3), 2)
+                
+                graph["edges"].append({
+                    "from": name1,
+                    "to": name2,
+                    "weight": round(weight, 2),
+                    "type": relationship_type,
+                    "trust": trust,
+                    "similarity": round(similarity, 2)
+                })
+        
+        return graph
+    
     def generate_character(self, name: str = None) -> Dict[str, Any]:
         """Generate a character from template"""
         name = name or random.choice(self.character_names)
@@ -439,12 +604,38 @@ class KnowledgeBaseGenerator:
             'name': name,
             'exclude_name': name,
             'character_names': self.character_names,
-            'object_names': self.object_names
+            'object_names': self.object_names,
+            'ekman_emotions': self.vocab.get('ekman_emotions', ['anger', 'fear', 'disgust', 'sadness', 'joy', 'surprise']),
+            'ai_states': self.vocab.get('ai_states', ['IDLE', 'PATROLLING', 'RESTING', 'COMBAT', 'FLEEING'])
         }
         
         character = self.template_engine.build(template, context)
         character['id'] = char_id
         character['name'] = name
+        
+        # Generate behavior graph
+        character['behavior_graph'] = self._generate_behavior_graph(name)
+        character['behavior_graph_id'] = 'default'
+        
+        # Ensure reasoning stack exists with proper fields
+        if 'memory_perception' not in character:
+            character['memory_perception'] = {}
+        if 'reasoning_stack' not in character['memory_perception']:
+            character['memory_perception']['reasoning_stack'] = {
+                "current_goal": random.choice(["survival", "exploration", "social_belonging", "power_achievement", "knowledge_acquisition", "altruism"]),
+                "planned_actions": [],
+                "decision_history": [],
+                "trust_scores": {},
+                "emotional_state": random.choice(self.vocab.get('ekman_emotions', ['neutral'])),
+                "emotion_intensity": round(random.uniform(0.1, 1.0), 2),
+                "risk_tolerance": round(random.uniform(0.1, 0.9), 2),
+                "cooperativeness": round(random.uniform(0.1, 0.9), 2),
+                "emotional_memory": [],
+                "condition_cache": {}
+            }
+        
+        # Add condition registry reference
+        character['condition_registry'] = list(self.condition_registry.keys())
         
         return character
     
@@ -460,7 +651,11 @@ class KnowledgeBaseGenerator:
         context = {
             'id': obj_id,
             'name': name,
-            'object_names': self.object_names
+            'object_names': self.object_names,
+            'qualities': self.vocab.get('qualities', ['standard']),
+            'materials': self.vocab.get('materials', ['steel']),
+            'object_types': self.vocab.get('object_types', ['item']),
+            'object_subtypes': self.vocab.get('object_subtypes', ['item'])
         }
         
         obj = self.template_engine.build(template, context)
@@ -483,7 +678,10 @@ class KnowledgeBaseGenerator:
             'character_names': self.character_names,
             'object_names': self.object_names,
             'scene_names': self.scene_names,
-            'locations': self._get_vocab('locations', ['Unknown'])
+            'locations': self.vocab.get('locations', ['Unknown']),
+            'scene_types': self.vocab.get('scene_types', ['interior']),
+            'climates': self.vocab.get('climates', ['temperate']),
+            'terrain_types': self.vocab.get('terrain_types', ['plains'])
         }
         
         scene = self.template_engine.build(template, context)
@@ -493,12 +691,38 @@ class KnowledgeBaseGenerator:
         else:
             scene = {"scenes": {"current_scene": name, **scene}}
         
+        # Generate scene graph if not present
+        if 'scene_graph' not in scene.get('scenes', {}):
+            zone_ids = scene.get('scenes', {}).get('zone_ids', [])
+            if zone_ids:
+                scene_graph = {
+                    "nodes": [
+                        {"id": zid, "type": "zone", "name": f"Zone_{i+1}"}
+                        for i, zid in enumerate(zone_ids)
+                    ],
+                    "edges": []
+                }
+                # Connect zones in a chain with conditions
+                conditions = ['true', 'door_open', 'has_key', 'boss_defeated']
+                for i in range(len(zone_ids) - 1):
+                    scene_graph["edges"].append({
+                        "from": zone_ids[i],
+                        "to": zone_ids[i + 1],
+                        "weight": round(random.uniform(0.5, 1.0), 2),
+                        "condition": random.choice(conditions),
+                        "cost": random.randint(1, 5)
+                    })
+                scene['scenes']['scene_graph'] = scene_graph
+        
         return scene
     
     def generate_rules(self) -> List[Dict[str, Any]]:
         """Generate rules from template"""
         template = self.config.get('rules_template', [])
-        return deepcopy(template) if template else []
+        rules = deepcopy(template) if template else []
+        
+        # Add any additional rules from config
+        return rules
     
     def generate_world_states(self, scene_name: str = None) -> Dict[str, Any]:
         """Generate world states from template"""
@@ -521,8 +745,9 @@ class KnowledgeBaseGenerator:
         context = {
             'scene_name': scene_name,
             'scene_names': self.scene_names,
-            'weather': self._get_vocab('weather', ['clear']),
-            'time_of_day': self._get_vocab('time_of_day', ['morning'])
+            'weather': self.vocab.get('weather', ['clear']),
+            'time_of_day': self.vocab.get('time_of_day', ['morning']),
+            'ekman_emotions': self.vocab.get('ekman_emotions', ['neutral'])
         }
         
         states = self.template_engine.build(template, context)
@@ -562,6 +787,31 @@ class KnowledgeBaseGenerator:
         scene_data = self.generate_scene() if generate_scene else {}
         rules = self.generate_rules() if generate_rules else []
         
+        # Generate character relationship graph
+        character_graph = self._generate_character_graphs(characters) if characters else {"nodes": [], "edges": []}
+        
+        # Add relationship graph to each character's social attributes
+        for char in characters:
+            if 'social_attributes' not in char:
+                char['social_attributes'] = {}
+            char['social_attributes']['relationship_graph'] = character_graph
+            
+            # Add trust scores to reasoning stack
+            memory = char.get('memory_perception', {})
+            reasoning = memory.get('reasoning_stack', {})
+            
+            # Find relationships for this character
+            trust_scores = {}
+            for edge in character_graph.get('edges', []):
+                if edge.get('from') == char.get('name'):
+                    trust_scores[edge.get('to')] = edge.get('trust', 0.5)
+                elif edge.get('to') == char.get('name'):
+                    trust_scores[edge.get('from')] = edge.get('trust', 0.5)
+            
+            reasoning['trust_scores'] = trust_scores
+            memory['reasoning_stack'] = reasoning
+            char['memory_perception'] = memory
+        
         scene_name = scene_data.get("scenes", {}).get("current_scene", "UNKNOWN") if scene_data else "UNKNOWN"
         world_states = self.generate_world_states(scene_name)
         
@@ -571,7 +821,9 @@ class KnowledgeBaseGenerator:
             "scenes": scene_data,
             "rules": rules,
             "world_states": world_states,
-            "action_catalog": self.get_action_catalog()
+            "action_catalog": self.get_action_catalog(),
+            "character_graph": character_graph,
+            "condition_registry": self.condition_registry
         }
         
         print(f"[OK] Generated {len(characters)} characters, {len(objects)} objects")
@@ -602,13 +854,19 @@ class KnowledgeBaseGenerator:
             "objects": "objects",
             "scenes": "scenes",
             "rules": "rules",
-            "action_catalog": "action_catalog"
+            "action_catalog": "action_catalog",
+            "character_graph": "character_graph",
+            "condition_registry": "condition_registry"
         }
         
         for key, filename in components.items():
             if key in kb:
                 if key == "action_catalog":
                     data = {"action_catalog": kb["action_catalog"]}
+                elif key == "character_graph":
+                    data = {"character_graph": kb["character_graph"]}
+                elif key == "condition_registry":
+                    data = {"condition_registry": kb["condition_registry"]}
                 else:
                     data = {key: kb[key]}
                 if not self._save_json(data, os.path.join(target_folder, f"{filename}.json")):
@@ -651,6 +909,7 @@ def main():
     parser.add_argument('--objects', type=int, default=15, help='Number of objects to generate (default: 15)')
     parser.add_argument('--no-scene', action='store_true', help='Do not generate a scene')
     parser.add_argument('--no-rules', action='store_true', help='Do not generate rules')
+    parser.add_argument('--config', type=str, default='generation_config.json', help='Configuration file')
     args = parser.parse_args()
     
     print("="*70)
@@ -661,7 +920,7 @@ def main():
         print("Output folder: world_<timestamp> (default)")
     print("="*70)
     
-    generator = KnowledgeBaseGenerator(output_folder=args.folder)
+    generator = KnowledgeBaseGenerator(config_file=args.config, output_folder=args.folder)
     
     print("\n" + "="*70)
     print("GENERATING KNOWLEDGE BASE")
@@ -689,8 +948,12 @@ def main():
     print(f"  - {target}/rules.json")
     print(f"  - {target}/world_states.json")
     print(f"  - {target}/action_catalog.json")
+    print(f"  - {target}/character_graph.json")
+    print(f"  - {target}/condition_registry.json")
     print("="*70)
     print("\n[OK] Generation complete")
+    print("\nTo run the world:")
+    print(f"  python swm.py --world {target}")
 
 
 if __name__ == "__main__":

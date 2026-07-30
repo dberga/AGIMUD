@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-SWM Run P2P - P2P node for distributed SWM
-Roles: --host (default) creates the world, --join connects to a host
+SWM Run P2P - P2P node for distributed SWM with dynamic config loading and 1-by-1 epoch streaming
 """
 
 import json
@@ -12,6 +11,7 @@ import threading
 import sys
 import argparse
 import shutil
+import subprocess
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 from swm_run import WorldRunner
@@ -44,9 +44,10 @@ class NetworkMessage:
 class SignalingServer:
     """Simple signaling server for P2P discovery"""
     
-    def __init__(self, host: str = "127.0.0.1", port: int = 7000):
+    def __init__(self, host: str = "127.0.0.1", port: int = 7000, timeout: int = 5):
         self.host = host
         self.port = port
+        self.timeout = timeout
         self.nodes: Dict[str, Dict[str, Any]] = {}
         self.running = False
         self.socket = None
@@ -60,11 +61,12 @@ class SignalingServer:
         self.socket.setblocking(False)
         
         print(f"[SIGNALING] Server started on {self.host}:{self.port}")
+        sys.stdout.flush()
         
         while self.running:
             try:
                 client_socket, addr = self.socket.accept()
-                client_socket.settimeout(5)
+                client_socket.settimeout(self.timeout)
                 data = client_socket.recv(65536).decode('utf-8')
                 if data:
                     self._handle_request(data, client_socket)
@@ -72,13 +74,12 @@ class SignalingServer:
             except BlockingIOError:
                 pass
             except Exception as e:
-                print(f"[SIGNALING] Error: {e}")
+                pass
             time.sleep(0.1)
     
     def _handle_request(self, data: str, sock: socket.socket):
         try:
             msg = NetworkMessage.from_json(data)
-            
             if msg.type == "REGISTER":
                 node_id = msg.payload.get('node_id')
                 host = msg.payload.get('host')
@@ -89,18 +90,9 @@ class SignalingServer:
                             for nid, info in self.nodes.items() if nid != node_id]
                     response = NetworkMessage("PEERS", {"peers": peers})
                     sock.sendall((response.to_json() + '\n').encode('utf-8'))
-                    print(f"[SIGNALING] Node registered: {node_id} ({len(peers)} peers)")
-                    
-            elif msg.type == "GET_PEERS":
-                node_id = msg.payload.get('node_id')
-                peers = [{"id": nid, "host": info['host'], "port": info['port']} 
-                        for nid, info in self.nodes.items() if nid != node_id]
-                response = NetworkMessage("PEERS", {"peers": peers})
-                sock.sendall((response.to_json() + '\n').encode('utf-8'))
-                print(f"[SIGNALING] Sent peers to {node_id}: {len(peers)} peers")
-                
+                    sys.stdout.flush()
         except Exception as e:
-            print(f"[SIGNALING] Error: {e}")
+            pass
     
     def stop(self):
         self.running = False
@@ -109,6 +101,8 @@ class SignalingServer:
 
 
 class SWMP2PNode:
+    """P2P Node with configuration-driven broadcast intervals and atomic rendering"""
+    
     def __init__(self, config_file: str = "network_p2p_config.json", 
                  role: str = "host", args: Any = None):
         self.config = self._load_config(config_file)
@@ -118,24 +112,46 @@ class SWMP2PNode:
         self.peers: Dict[str, Dict[str, Any]] = {}
         self.node_socket = None
         self.world_runner = None
-        self.sync_interval = self.config['world'].get('sync_interval', 2.0)
+        
+        world_cfg = self.config.get('world', {'world_folder': 'world_p2p', 'sync_interval': 2.0, 'broadcast_interval': 1})
+        node_cfg = self.config.get('node', {'id': 'node_001', 'host': '127.0.0.1', 'port': 6000})
+        conn_cfg = self.config.get('connection', {'timeout': 5})
+        
+        self.sync_interval = world_cfg.get('sync_interval', 2.0)
+        self.broadcast_interval = world_cfg.get('broadcast_interval', 1)
+        self.timeout = conn_cfg.get('timeout', 5)
+        
+        arg_world = getattr(self.args, 'world', None)
+        if arg_world:
+            self.world_folder = arg_world
+        else:
+            self.world_folder = world_cfg.get('world_folder', 'world_p2p')
+            
+        self.node_id = node_cfg.get('id', 'node_001')
+        self.node_host = node_cfg.get('host', '127.0.0.1')
+        self.node_port = node_cfg.get('port', 6000)
+        
         self.last_sync = 0
         self.last_render = 0
         self.render_interval = 1.0
-        self.node_id = self.config['node']['id']
-        self.node_host = self.config['node']['host']
-        self.node_port = self.config['node']['port']
-        self.world_folder = self.config['world'].get('world_folder', 'world_p2p')
         self.is_connected = False
-        self.log_file = None
+        
+        self.synced_world_state = {}
+        self.synced_characters = []
+        self.synced_objects = []
+        self.synced_events = []
+        self.synced_epoch = 0
         
         if self.role == "host":
             print("[P2P] Starting signaling server...")
-            threading.Thread(target=self._run_signaling_server, daemon=True).start()
+            sig_cfg = self.config.get('signaling_server', {'host': '127.0.0.1', 'port': 7000})
+            threading.Thread(target=self._run_signaling_server, args=(sig_cfg['host'], sig_cfg['port'], self.timeout), daemon=True).start()
             time.sleep(1)
         
         print(f"[P2P] Node initialized as {self.role.upper()} - {self.node_id}")
         print(f"[P2P] Listening on {self.node_host}:{self.node_port}")
+        print(f"[P2P] Broadcast Interval: every {self.broadcast_interval} tick(s)")
+        sys.stdout.flush()
     
     def _load_config(self, config_file: str) -> Dict[str, Any]:
         if os.path.exists(config_file):
@@ -153,21 +169,19 @@ class SWMP2PNode:
         return {
             "node": {"id": "node_001", "host": "127.0.0.1", "port": 6000},
             "signaling_server": {"host": "127.0.0.1", "port": 7000},
-            "world": {"world_folder": "world_p2p", "sync_interval": 2.0},
+            "world": {"world_folder": "world_p2p", "sync_interval": 2.0, "broadcast_interval": 1},
+            "connection": {"timeout": 5},
             "user": {"name": "P2P_Player", "initial_scene": "Castle"}
         }
     
-    def _run_signaling_server(self):
-        signaling = SignalingServer(
-            self.config['signaling_server']['host'],
-            self.config['signaling_server']['port']
-        )
+    def _run_signaling_server(self, host: str, port: int, timeout: int):
+        signaling = SignalingServer(host, port, timeout)
         signaling.start()
     
     def _log(self, text: str):
-        """Write to log file in world folder"""
         if not self.world_folder:
             return
+        os.makedirs(self.world_folder, exist_ok=True)
         log_filename = os.path.join(self.world_folder, f"p2p_{self.node_id}.log")
         try:
             with open(log_filename, 'a', encoding='utf-8') as f:
@@ -178,26 +192,19 @@ class SWMP2PNode:
     def _generate_world(self):
         try:
             print("[P2P] Generating world...")
-            import subprocess
-            result = subprocess.run([sys.executable, "swm_generate.py"], 
+            result = subprocess.run([sys.executable, "swm_generate.py", "--folder", self.world_folder], 
                                   capture_output=True, text=True, cwd=os.getcwd())
             if result.returncode != 0:
                 print(f"[P2P] Failed to generate world: {result.stderr}")
                 return
-            
-            world_folders = [d for d in os.listdir('.') if os.path.isdir(d) and d.startswith('world_')]
-            if world_folders:
-                world_folders.sort(reverse=True)
-                latest = world_folders[0]
-                if os.path.exists(self.world_folder):
-                    shutil.rmtree(self.world_folder)
-                os.rename(latest, self.world_folder)
-                print(f"[P2P] World generated in {self.world_folder}")
+            print(f"[P2P] World generated in {self.world_folder}")
+            sys.stdout.flush()
         except Exception as e:
             print(f"[P2P] Error generating world: {e}")
     
     def _initialize_world(self):
         required = ["characters.json", "objects.json", "scenes.json", "rules.json", "world_states.json"]
+        os.makedirs(self.world_folder, exist_ok=True)
         all_exist = all(os.path.exists(os.path.join(self.world_folder, f)) for f in required)
         
         if not all_exist:
@@ -206,6 +213,7 @@ class SWMP2PNode:
                 self._generate_world()
             else:
                 print(f"[P2P] Waiting for world sync from host...")
+                sys.stdout.flush()
                 return False
         
         load_existing = not getattr(self.args, 'new', False)
@@ -216,12 +224,12 @@ class SWMP2PNode:
         )
         return True
     
-    def register_with_signaling(self):
+    def register_with_signaling(self, silent: bool = False):
         try:
+            sig_cfg = self.config.get('signaling_server', {'host': '127.0.0.1', 'port': 7000})
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
-            sock.connect((self.config['signaling_server']['host'], 
-                         self.config['signaling_server']['port']))
+            sock.settimeout(self.timeout)
+            sock.connect((sig_cfg['host'], sig_cfg['port']))
             
             msg = NetworkMessage("REGISTER", {
                 "node_id": self.node_id,
@@ -239,184 +247,161 @@ class SWMP2PNode:
                     for peer in peers:
                         if peer['id'] != self.node_id:
                             self.peers[peer['id']] = {"host": peer['host'], "port": peer['port']}
-                    print(f"[P2P] Registered. Found {len(self.peers)} peers")
-                    for peer_id, info in self.peers.items():
-                        print(f"  - {peer_id} ({info['host']}:{info['port']})")
-            
+                    if not silent:
+                        print(f"[P2P] Registered. Found {len(self.peers)} peers")
+                        sys.stdout.flush()
             sock.close()
-            
         except Exception as e:
-            print(f"[P2P] Failed to register with signaling: {e}")
+            pass
     
-    def _render_host(self):
-        """Render for host - full visualization"""
-        if not self.world_runner:
-            return
-        
-        ws = self.world_runner.world.world_states.to_dict()
-        chars = self.world_runner.world.characters.get_all()
-        objs = self.world_runner.world.objects.get_all()
-        timers = ws.get('global_timers', {})
-        epoch = timers.get('day_cycle', 0)
-        
-        # Build output
+    def _render(self):
+        """Unified atomic render block matching Server and Client layout"""
         output = []
-        output.append("\n" + "="*60)
-        output.append(f"P2P NODE [HOST] {self.node_id} - EPOCH {epoch}")
-        output.append(f"Peers: {len(self.peers)}")
-        output.append("="*60)
+        output.append("\n" + "="*80)
         
-        global_states = ws.get('global_states', {})
-        output.append(f"\n[WORLD STATE]")
-        output.append(f"  Scene: {ws.get('current_scene', '?')}")
-        output.append(f"  Weather: {global_states.get('weather', '?')}")
-        output.append(f"  Time: {global_states.get('time_of_day', '?')}")
-        output.append(f"  Day Cycle: {epoch // 60:02d}:{epoch % 60:02d}")
-        
-        output.append(f"\n[CHARACTERS] ({len(chars)})")
-        for char in chars[:3]:
-            name = char.get('name', 'Unknown')
-            ai_state = char.get('ai_state', 'IDLE')
-            status = char.get('status_variables', {})
-            health = status.get('health', '?')
-            stamina = status.get('stamina', '?')
-            location = char.get('navigation', {}).get('current_location', '?')
-            output.append(f"  {name} [{ai_state}] HP:{health} ST:{stamina} @ {location}")
-        if len(chars) > 3:
-            output.append(f"  ... and {len(chars) - 3} more")
-        
-        output.append(f"\n[OBJECTS] ({len(objs)})")
-        for obj in objs[:3]:
-            name = obj.get('name', 'Unknown')
-            props = obj.get('properties', {})
-            obj_type = 'item'
-            if isinstance(props, dict):
-                obj_type = props.get('type', 'item')
-                if isinstance(obj_type, dict):
-                    obj_type = 'item'
-            obj_vars = obj.get('object_variables', {})
-            durability = obj_vars.get('durability', '?')
-            if isinstance(durability, float):
-                durability = int(round(durability))
-            quality = obj_vars.get('quality', 'standard')
-            output.append(f"  {name} ({obj_type}) [{quality}] Durability:{durability}")
-        if len(objs) > 3:
-            output.append(f"  ... and {len(objs) - 3} more")
-        
-        if self.peers:
-            output.append(f"\n[PEERS] ({len(self.peers)})")
-            for peer_id, peer_info in list(self.peers.items())[:3]:
-                output.append(f"  - {peer_id} ({peer_info.get('host')}:{peer_info.get('port')})")
-            if len(self.peers) > 3:
-                output.append(f"  ... and {len(self.peers) - 3} more")
-        
-        events = self.world_runner.event_history[-3:]
-        if events:
-            output.append(f"\n[RECENT EVENTS]")
-            for event in events:
-                output.append(f"  - {event.get('text', '')[:80]}")
-        
-        output.append("\n" + "="*60)
-        output.append("Press Ctrl+C to stop")
-        
-        # Print to console
-        for line in output:
-            print(line)
-        
-        # Log to file
-        for line in output:
-            self._log(line)
-    
-    def _render_joiner(self):
-        """Render for joiner - minimal connection status only"""
-        epoch = 0
-        if self.world_runner:
-            ws = self.world_runner.world.world_states.to_dict()
+        if self.role == "host":
+            ws = self.world_runner.world.world_states.to_dict() if self.world_runner else {}
+            chars = self.world_runner.world.characters.get_all() if self.world_runner else []
+            objs = self.world_runner.world.objects.get_all() if self.world_runner else []
             timers = ws.get('global_timers', {})
             epoch = timers.get('day_cycle', 0)
+            tick = self.world_runner.tick_count if self.world_runner else 0
+            events = self.world_runner.event_history[-10:] if self.world_runner else []
+            
+            output.append(f"SIMULATED WORLD P2P [HOST] - EPOCH {tick} | Node: {self.node_id} | Peers: {len(self.peers)}")
+            output.append("="*80)
+            
+            global_states = ws.get('global_states', {})
+            output.append(f"\n[WORLD STATE]")
+            output.append(f"  Weather: {global_states.get('weather', 'Unknown')}")
+            output.append(f"  Time of Day: {global_states.get('time_of_day', 'Unknown')}")
+            output.append(f"  Mood: {global_states.get('mood', 'combat')}")
+            output.append(f"  Day Cycle: {epoch // 60:02d}:{epoch % 60:02d}")
+            
+            output.append(f"\n[CHARACTERS] ({len(chars)})")
+            for char in chars:
+                name = char.get('name', 'Unknown')
+                ai_state = char.get('ai_state', 'IDLE')
+                goal = char.get('goal', 'social_belonging')
+                emotion = char.get('emotion', 'neutral')
+                status = char.get('status_variables', {})
+                health = int(round(status.get('health', 100))) if isinstance(status.get('health'), (int, float)) else '?'
+                stamina = int(round(status.get('stamina', 100))) if isinstance(status.get('stamina'), (int, float)) else '?'
+                location = char.get('navigation', {}).get('current_location', 'Unknown')
+                output.append(f"  * {name} [{ai_state}] | Goal: {goal} | Emotion: {emotion} | HP:{health} | ST:{stamina} @ {location}")
+            
+            output.append(f"\n[OBJECTS] ({len(objs)})")
+            for obj in objs[:3]:
+                name = obj.get('name', 'Unknown')
+                props = obj.get('properties', {})
+                obj_type = props.get('type', 'item') if isinstance(props, dict) else 'item'
+                obj_vars = obj.get('object_variables', {})
+                durability = int(round(obj_vars.get('durability', 0))) if isinstance(obj_vars.get('durability'), float) else obj_vars.get('durability', '?')
+                quality = obj_vars.get('quality', 'standard')
+                output.append(f"  - {name} ({obj_type}) [{quality}] Durability:{durability}")
+            if len(objs) > 3:
+                output.append(f"  ... and {len(objs) - 3} more")
+            
+            if events:
+                output.append(f"\n[RECENT EVENTS]")
+                for event in events:
+                    t = event.get('tick', '?')
+                    text = event.get('text', '')
+                    output.append(f"  [{t}] {text}")
+                    
+        else:
+            # Joiner view
+            output.append(f"SIMULATED WORLD P2P [JOINER] - EPOCH {self.synced_epoch} | Node: {self.node_id} | Connected: {self.is_connected}")
+            output.append("="*80)
+            
+            global_states = self.synced_world_state.get('global_states', {})
+            timers = self.synced_world_state.get('global_timers', {})
+            day_cycle = timers.get('day_cycle', 0)
+            
+            output.append(f"\n[WORLD STATE]")
+            output.append(f"  Weather: {global_states.get('weather', 'Unknown')}")
+            output.append(f"  Time of Day: {global_states.get('time_of_day', 'Unknown')}")
+            output.append(f"  Mood: {global_states.get('mood', 'combat')}")
+            output.append(f"  Day Cycle: {int(day_cycle // 60):02d}:{int(day_cycle % 60):02d}")
+            
+            if self.synced_characters:
+                output.append(f"\n[CHARACTERS] ({len(self.synced_characters)})")
+                for char in self.synced_characters:
+                    name = char.get('name', 'Unknown') if isinstance(char, dict) else 'Unknown'
+                    ai_state = char.get('ai_state', 'IDLE') if isinstance(char, dict) else 'IDLE'
+                    goal = char.get('goal', 'social_belonging') if isinstance(char, dict) else 'social_belonging'
+                    emotion = char.get('emotion', 'neutral') if isinstance(char, dict) else 'neutral'
+                    status = char.get('status_variables', {}) if isinstance(char, dict) else {}
+                    health = int(round(status.get('health', 100))) if isinstance(status.get('health'), (int, float)) else '?'
+                    stamina = int(round(status.get('stamina', 100))) if isinstance(status.get('stamina'), (int, float)) else '?'
+                    location = char.get('navigation', {}).get('current_location', 'Unknown')
+                    output.append(f"  * {name} [{ai_state}] | Goal: {goal} | Emotion: {emotion} | HP:{health} | ST:{stamina} @ {location}")
+            
+            if self.synced_events:
+                output.append(f"\n[RECENT EVENTS]")
+                for event in self.synced_events:
+                    t = event.get('tick', '?')
+                    text = event.get('text', '')
+                    output.append(f"  [{t}] {text}")
         
-        print(f"\n[P2P JOINER] {self.node_id} - Connected: {self.is_connected}, Peers: {len(self.peers)}, EPOCH: {epoch}")
-        self._log(f"[P2P JOINER] {self.node_id} - Connected: {self.is_connected}, Peers: {len(self.peers)}, EPOCH: {epoch}")
-    
-    def _send_world_state(self, sock: socket.socket):
-        """Send the full world state to a joiner"""
-        if not self.world_runner:
-            return
+        output.append("\n" + "="*80)
+        output.append("Press Ctrl+C to stop")
         
-        ws = self.world_runner.world.world_states.to_dict()
-        timers = ws.get('global_timers', {})
-        epoch = timers.get('day_cycle', 0)
-        chars = [c.to_dict() for c in self.world_runner.world.characters.get_all()]
-        objs = [o.to_dict() for o in self.world_runner.world.objects.get_all()]
-        events = self.world_runner.event_history[-5:]
-        
-        response = NetworkMessage("WORLD_STATE", {
-            "epoch": epoch,
-            "world_state": ws,
-            "characters": chars,
-            "objects": objs,
-            "events": events
-        }, sender=self.node_id)
-        sock.sendall((response.to_json() + '\n').encode('utf-8'))
-        print(f"[P2P] Sent world state to joiner (epoch {epoch})")
-        self._log(f"Sent world state to joiner (epoch {epoch})")
+        full_render_string = "\n".join(output)
+        print(full_render_string)
+        self._log(full_render_string)
+        sys.stdout.flush()
     
     def _handle_peer_message(self, msg: NetworkMessage, sock: socket.socket):
         msg_type = msg.type
         
         if msg_type == "REQUEST_WORLD":
-            if self.role == "host":
-                self._send_world_state(sock)
-        
+            if self.role == "host" and self.world_runner:
+                ws = self.world_runner.world.world_states.to_dict()
+                timers = ws.get('global_timers', {})
+                epoch = timers.get('day_cycle', 0)
+                chars = [c.to_dict() for c in self.world_runner.world.characters.get_all()]
+                objs = [o.to_dict() for o in self.world_runner.world.objects.get_all()]
+                events = self.world_runner.event_history[-10:]
+                
+                response = NetworkMessage("WORLD_STATE", {
+                    "epoch": epoch,
+                    "tick": self.world_runner.tick_count,
+                    "world_state": ws,
+                    "characters": chars,
+                    "objects": objs,
+                    "events": events
+                }, sender=self.node_id)
+                sock.sendall((response.to_json() + '\n').encode('utf-8'))
+                
         elif msg_type == "WORLD_STATE":
             if self.role == "join":
-                epoch = msg.payload.get('epoch', 0)
-                ws = msg.payload.get('world_state', {})
-                chars = msg.payload.get('characters', [])
-                objs = msg.payload.get('objects', [])
-                events = msg.payload.get('events', [])
+                self.synced_epoch = msg.payload.get('tick', msg.payload.get('epoch', 0))
+                self.synced_world_state = msg.payload.get('world_state', {})
+                self.synced_characters = msg.payload.get('characters', [])
+                self.synced_objects = msg.payload.get('objects', [])
+                self.synced_events = msg.payload.get('events', [])
+                self.is_connected = True
                 
-                print(f"[P2P] Received world state from {msg.sender} at epoch {epoch}")
-                self._log(f"Received world state from {msg.sender} at epoch {epoch}")
-                
-                # Update joiner's world state
                 if self.world_runner:
                     world = self.world_runner.world
-                    
-                    # Update world states
-                    for key, value in ws.items():
+                    for key, value in self.synced_world_state.items():
                         world.world_states.set(key, value)
-                    
-                    # Clear and reload characters
                     world.characters.clear_all()
-                    for char_data in chars:
+                    for char_data in self.synced_characters:
                         world.characters.add_entity(char_data)
-                    
-                    # Clear and reload objects
                     world.objects.clear_all()
-                    for obj_data in objs:
+                    for obj_data in self.synced_objects:
                         world.objects.add_entity(obj_data)
-                    
-                    # Update event history
-                    if events:
-                        self.world_runner.event_history = events
-                    
-                    self.is_connected = True
-                    print(f"[P2P] World state updated to epoch {epoch}")
-                    self._log(f"World state updated to epoch {epoch}")
-                    
-                    # Render joiner immediately
-                    self._render_joiner()
+                    if self.synced_events:
+                        self.world_runner.event_history = self.synced_events
+                
+                self._render()
     
     def start(self):
         self.running = True
-        
-        if self.role == "host":
-            self._initialize_world()
-        else:
-            self._initialize_world()
-        
-        self.register_with_signaling()
+        self._initialize_world()
+        self.register_with_signaling(silent=False)
         
         self.node_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.node_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -426,6 +411,7 @@ class SWMP2PNode:
         
         print(f"[P2P] Node listening on port {self.node_port}")
         print("[P2P] Press Ctrl+C to stop\n")
+        sys.stdout.flush()
         
         try:
             while self.running:
@@ -434,21 +420,12 @@ class SWMP2PNode:
                 
                 if self.role == "host" and self.world_runner:
                     self.world_runner._update_world()
+                    self._render()
                     
-                    # Broadcast to peers every 5 ticks
-                    if self.world_runner.tick_count % 5 == 0:
+                    if self.world_runner.tick_count % self.broadcast_interval == 0:
                         self._broadcast_to_peers()
                 
-                # Render periodically
-                current_time = time.time()
-                if current_time - self.last_render >= self.render_interval:
-                    if self.role == "host":
-                        self._render_host()
-                    else:
-                        self._render_joiner()
-                    self.last_render = current_time
-                
-                time.sleep(0.1)
+                time.sleep(1.0 / 1.0)
                 
         except KeyboardInterrupt:
             print("\n[P2P] Shutting down...")
@@ -458,7 +435,7 @@ class SWMP2PNode:
     def _accept_connections(self):
         try:
             client_socket, addr = self.node_socket.accept()
-            client_socket.settimeout(5)
+            client_socket.settimeout(self.timeout)
             data = b''
             while True:
                 try:
@@ -476,17 +453,14 @@ class SWMP2PNode:
                     msg = NetworkMessage.from_json(data.decode('utf-8'))
                     self._handle_peer_message(msg, client_socket)
                 except json.JSONDecodeError as e:
-                    print(f"[P2P] Error decoding message: {e}")
+                    pass
             client_socket.close()
-        except BlockingIOError:
-            pass
-        except socket.timeout:
+        except (BlockingIOError, socket.timeout):
             pass
         except Exception as e:
-            print(f"[P2P] Error accepting connection: {e}")
+            pass
     
     def _broadcast_to_peers(self):
-        """Host: Broadcast world state to all peers"""
         if not self.world_runner:
             return
         
@@ -495,28 +469,26 @@ class SWMP2PNode:
         epoch = timers.get('day_cycle', 0)
         chars = [c.to_dict() for c in self.world_runner.world.characters.get_all()]
         objs = [o.to_dict() for o in self.world_runner.world.objects.get_all()]
-        events = self.world_runner.event_history[-5:]
+        events = self.world_runner.event_history[-10:]
         
         msg = NetworkMessage("WORLD_STATE", {
             "epoch": epoch,
+            "tick": self.world_runner.tick_count,
             "world_state": ws,
             "characters": chars,
             "objects": objs,
             "events": events
         }, sender=self.node_id)
         
-        # Keep connection open until data is sent
         for peer_id, peer_info in self.peers.items():
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(5)
+                sock.settimeout(self.timeout)
                 sock.connect((peer_info['host'], peer_info['port']))
                 sock.sendall((msg.to_json() + '\n').encode('utf-8'))
                 sock.close()
-                print(f"[P2P] Broadcast to {peer_id} at epoch {epoch}")
-                self._log(f"Broadcast to {peer_id} at epoch {epoch}")
             except Exception as e:
-                print(f"[P2P] Failed to broadcast to {peer_id}: {e}")
+                pass
     
     def _sync_with_peers(self):
         current_time = time.time()
@@ -524,14 +496,13 @@ class SWMP2PNode:
             return
         
         self.last_sync = current_time
-        self.register_with_signaling()
+        self.register_with_signaling(silent=True)
         
-        # Joiner: request world from peers
         if self.role == "join" and self.peers:
             for peer_id, peer_info in self.peers.items():
                 try:
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(5)
+                    sock.settimeout(self.timeout)
                     sock.connect((peer_info['host'], peer_info['port']))
                     
                     msg = NetworkMessage("REQUEST_WORLD", {}, sender=self.node_id)
@@ -545,18 +516,15 @@ class SWMP2PNode:
                                 self._handle_peer_message(response, sock)
                         except:
                             pass
-                    
                     sock.close()
-                    break  # Only request from first peer
+                    break
                 except Exception as e:
-                    print(f"[P2P] Failed to request from {peer_id}: {e}")
+                    pass
     
     def _cleanup(self):
         if self.node_socket:
             self.node_socket.close()
-        log_file = os.path.join(self.world_folder, f"p2p_{self.node_id}.log")
-        print(f"[P2P] Cleanup complete. Log saved to {log_file}")
-        self._log("Cleanup complete")
+        print(f"[P2P] Cleanup complete. Log saved to {os.path.join(self.world_folder, f'p2p_{self.node_id}.log')}")
 
 
 def main():
@@ -564,13 +532,11 @@ def main():
     parser.add_argument('--host', action='store_true', help='Run as host (creates world, default)')
     parser.add_argument('--join', action='store_true', help='Run as joiner (connects to host)')
     parser.add_argument('--new', action='store_true', help='Create a new world state (ignore existing)')
+    parser.add_argument('--world', type=str, help='Specify an existing world folder to load')
     parser.add_argument('--config', type=str, default='network_p2p_config.json', help='Config file')
     args = parser.parse_args()
     
-    if args.join:
-        role = "join"
-    else:
-        role = "host"
+    role = "join" if args.join else "host"
     
     print("="*60)
     print(f"SWM P2P NODE - {role.upper()}")

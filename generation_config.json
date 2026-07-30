@@ -26,25 +26,72 @@
       "morale": {"type": "random_int", "min": 30, "max": 95},
       "is_alive": {"type": "constant", "value": true},
       "is_resting": {"type": "random_choice", "values": [true, false]},
-      "current_emotion": {"type": "random_choice", "source": "emotions"}
+      "current_emotion": {"type": "random_choice", "source": "ekman_emotions"}
     },
     "contained_objects": {"type": "random_sample", "source": "object_names", "min": 0, "max": 3},
     "ai_state": {"type": "random_choice", "source": "ai_states"},
-    "behavior_tree": {
-      "root": "Select",
-      "children": [
-        {
-          "type": "Sequence",
-          "name": "Primary_Duty",
-          "conditions": ["has_target"],
-          "actions": ["approach_target", "interact"]
-        }
+    "behavior_graph_id": {"type": "constant", "value": "default"},
+    "behavior_graph": {
+      "nodes": [
+        {"id": "idle", "type": "state", "priority": 0, "description": "Low arousal, no active goal"},
+        {"id": "explore", "type": "state", "priority": 1, "description": "BAS-driven, information seeking"},
+        {"id": "socialize", "type": "state", "priority": 2, "description": "Social reward seeking, belonging"},
+        {"id": "gather", "type": "state", "priority": 3, "description": "Resource acquisition, esteem needs"},
+        {"id": "combat", "type": "state", "priority": 4, "description": "BAS-driven, aggression/defense"},
+        {"id": "rest", "type": "state", "priority": 0, "description": "Drive reduction, recovery"},
+        {"id": "flee", "type": "state", "priority": 0, "description": "BIS-driven, avoidance/escape"},
+        {"id": "share", "type": "state", "priority": 2, "description": "Altruism, reciprocity, social capital"}
+      ],
+      "edges": [
+        {"from": "idle", "to": "explore", "weight": 0.3, "condition": "stamina > 50 AND emotional_state != sadness AND emotional_state != fear"},
+        {"from": "idle", "to": "socialize", "weight": 0.2, "condition": "morale > 40 AND emotional_state == joy"},
+        {"from": "idle", "to": "rest", "weight": 0.5, "condition": "stamina < 30 OR emotional_state == sadness"},
+        {"from": "explore", "to": "gather", "weight": 0.4, "condition": "hunger > 50 OR thirst > 50"},
+        {"from": "explore", "to": "combat", "weight": 0.15, "condition": "health > 60 AND emotional_state == anger AND enemy_nearby"},
+        {"from": "explore", "to": "idle", "weight": 0.3, "condition": "stamina < 40"},
+        {"from": "socialize", "to": "gather", "weight": 0.3, "condition": "has_allies AND cooperativeness > 0.6"},
+        {"from": "socialize", "to": "share", "weight": 0.2, "condition": "has_allies AND benevolence > 0.7"},
+        {"from": "socialize", "to": "idle", "weight": 0.4, "condition": "true"},
+        {"from": "gather", "to": "share", "weight": 0.2, "condition": "resources_excess AND cooperativeness > 0.5"},
+        {"from": "gather", "to": "idle", "weight": 0.3, "condition": "true"},
+        {"from": "gather", "to": "combat", "weight": 0.25, "condition": "enemy_nearby AND emotional_state == anger"},
+        {"from": "combat", "to": "flee", "weight": 0.3, "condition": "health < 30 OR emotional_state == fear"},
+        {"from": "combat", "to": "idle", "weight": 0.3, "condition": "enemy_defeated"},
+        {"from": "combat", "to": "rest", "weight": 0.2, "condition": "stamina < 20"},
+        {"from": "rest", "to": "idle", "weight": 0.7, "condition": "stamina > 80 AND emotional_state != sadness"},
+        {"from": "rest", "to": "socialize", "weight": 0.1, "condition": "morale < 30 AND emotional_state == sadness"},
+        {"from": "flee", "to": "rest", "weight": 0.5, "condition": "stamina < 30"},
+        {"from": "flee", "to": "idle", "weight": 0.5, "condition": "safe"},
+        {"from": "share", "to": "socialize", "weight": 0.5, "condition": "true"},
+        {"from": "share", "to": "idle", "weight": 0.3, "condition": "stamina < 40"}
+      ],
+      "transition_rules": [
+        {"from": "idle", "to": "gather", "weight": 0.3, "condition": "(hunger > 60 OR thirst > 60) AND stamina > 40"},
+        {"from": "idle", "to": "flee", "weight": 0.8, "condition": "emotional_state == fear AND threat_nearby"},
+        {"from": "idle", "to": "combat", "weight": 0.7, "condition": "emotional_state == anger AND enemy_nearby"},
+        {"from": "socialize", "to": "combat", "weight": 0.15, "condition": "ally_attacked AND emotional_state == anger"},
+        {"from": "rest", "to": "explore", "weight": 0.3, "condition": "stamina > 70 AND emotional_state != sadness"},
+        {"from": "explore", "to": "socialize", "weight": 0.2, "condition": "emotional_state == joy AND morale > 60"},
+        {"from": "gather", "to": "share", "weight": 0.25, "condition": "resources_excess AND cooperativeness > 0.6"},
+        {"from": "share", "to": "socialize", "weight": 0.6, "condition": "morale > 50 AND emotional_state == joy"}
       ]
     },
     "memory_perception": {
       "known_locations": {"type": "random_sample", "source": "locations", "min": 1, "max": 3},
       "known_characters": {"type": "random_sample", "source": "character_names", "min": 1, "max": 3},
-      "recent_events": []
+      "recent_events": [],
+      "reasoning_stack": {
+        "current_goal": {"type": "random_choice", "values": ["survival", "exploration", "social_belonging", "power_achievement", "knowledge_acquisition", "altruism"]},
+        "planned_actions": [],
+        "decision_history": [],
+        "trust_scores": {"type": "random_relationships", "source": "character_names", "max_count": 4},
+        "emotional_state": {"type": "random_choice", "source": "ekman_emotions"},
+        "emotion_intensity": {"type": "random_float", "min": 0.1, "max": 1.0, "decimals": 2},
+        "risk_tolerance": {"type": "random_float", "min": 0.1, "max": 0.9, "decimals": 2},
+        "cooperativeness": {"type": "random_float", "min": 0.1, "max": 0.9, "decimals": 2},
+        "emotional_memory": [],
+        "condition_cache": {}
+      }
     },
     "navigation": {
       "current_location": {"type": "random_choice", "source": "locations"},
@@ -137,8 +184,25 @@
           "region_id": "REGION_001",
           "zone_type": {"type": "random_choice", "source": "scene_types"},
           "is_restricted": {"type": "random_choice", "values": [true, false]},
-          "safe_zone": {"type": "random_choice", "values": [true, false]}
+          "safe_zone": {"type": "random_choice", "values": [true, false]},
+          "connections": {"type": "random_choice", "source": "zone_ids", "max_count": 3}
         }
+      },
+      "scene_graph": {
+        "nodes": [
+          {"id": "ZONE_001", "type": "entry", "name": "Entrance", "safe": true},
+          {"id": "ZONE_002", "type": "hub", "name": "Hall", "safe": false},
+          {"id": "ZONE_003", "type": "destination", "name": "Chamber", "safe": false},
+          {"id": "ZONE_004", "type": "passage", "name": "Corridor", "safe": false},
+          {"id": "ZONE_005", "type": "exit", "name": "Exit", "safe": true}
+        ],
+        "edges": [
+          {"from": "ZONE_001", "to": "ZONE_002", "weight": 1.0, "condition": "door_open", "cost": 1},
+          {"from": "ZONE_002", "to": "ZONE_003", "weight": 0.8, "condition": "has_key", "cost": 3},
+          {"from": "ZONE_002", "to": "ZONE_004", "weight": 0.5, "condition": "true", "cost": 2},
+          {"from": "ZONE_003", "to": "ZONE_005", "weight": 0.6, "condition": "boss_defeated", "cost": 5},
+          {"from": "ZONE_004", "to": "ZONE_005", "weight": 0.7, "condition": "true", "cost": 2}
+        ]
       },
       "buildings_containers": [
         {
@@ -272,6 +336,142 @@
         {"type": "modify", "target": "morale", "delta": 10},
         {"type": "modify", "target": "stamina", "delta": 5}
       ]
+    },
+    {
+      "id": "RULE_007",
+      "name": "emotion_transition_rule",
+      "type": "emotion",
+      "description": "Emotion-based state transitions (Ekman model)",
+      "emotion_mapping": {
+        "anger": {"to_state": "combat", "priority": 5, "arousal": "high"},
+        "fear": {"to_state": "flee", "priority": 4, "arousal": "high"},
+        "disgust": {"to_state": "flee", "priority": 3, "arousal": "medium"},
+        "sadness": {"to_state": "rest", "priority": 2, "arousal": "low"},
+        "joy": {"to_state": "socialize", "priority": 4, "arousal": "high"},
+        "surprise": {"to_state": "explore", "priority": 3, "arousal": "medium"}
+      },
+      "appraisal_rules": [
+        {"emotion": "anger", "trigger": "goal_blocked", "action": "combat"},
+        {"emotion": "fear", "trigger": "threat_detected", "action": "flee"},
+        {"emotion": "joy", "trigger": "goal_achieved", "action": "socialize"},
+        {"emotion": "sadness", "trigger": "loss_experienced", "action": "rest"},
+        {"emotion": "surprise", "trigger": "novelty_detected", "action": "explore"},
+        {"emotion": "disgust", "trigger": "contamination_detected", "action": "flee"}
+      ]
+    },
+    {
+      "id": "RULE_008",
+      "name": "schwartz_values_rule",
+      "type": "reasoning",
+      "description": "Schwartz values for social reasoning",
+      "schwartz_weights": {
+        "self_direction": 0.7,
+        "stimulation": 0.5,
+        "hedonism": 0.4,
+        "achievement": 0.6,
+        "power": 0.5,
+        "security": 0.7,
+        "conformity": 0.6,
+        "tradition": 0.5,
+        "benevolence": 0.7,
+        "universalism": 0.6
+      },
+      "trust_threshold": 0.6,
+      "cooperation_threshold": 0.5
+    },
+    {
+      "id": "RULE_009",
+      "name": "ostrom_governance_rule",
+      "type": "reasoning",
+      "description": "Ostrom institutional governance",
+      "ostrom_weights": {
+        "rule_1": 2.0,
+        "rule_2": 1.5
+      },
+      "ostrom_sanctions": {
+        "rule_1": 0.5,
+        "rule_2": 0.3
+      }
+    },
+    {
+      "id": "RULE_010",
+      "name": "montes_sierra_belief_rule",
+      "type": "reasoning",
+      "description": "Montes-Sierra belief deception",
+      "beliefs": {
+        "shared_resource": 5.0,
+        "trust": 5.0,
+        "cooperation": 5.0
+      },
+      "peer_beliefs": {
+        "shared_resource": 4.0,
+        "trust": 4.0,
+        "cooperation": 4.0
+      },
+      "discrepancy_flag": false
+    },
+    {
+      "id": "RULE_011",
+      "name": "behavior_graph_transition",
+      "type": "behavior_graph",
+      "description": "Behavior graph node transition rules",
+      "graph_nodes": [
+        {"id": "idle", "type": "state", "priority": 0, "arousal": "low"},
+        {"id": "explore", "type": "state", "priority": 1, "arousal": "medium"},
+        {"id": "socialize", "type": "state", "priority": 2, "arousal": "high"},
+        {"id": "gather", "type": "state", "priority": 3, "arousal": "medium"},
+        {"id": "combat", "type": "state", "priority": 4, "arousal": "high"},
+        {"id": "rest", "type": "state", "priority": 0, "arousal": "low"},
+        {"id": "flee", "type": "state", "priority": 0, "arousal": "high"},
+        {"id": "share", "type": "state", "priority": 2, "arousal": "medium"}
+      ],
+      "graph_edges": [
+        {"from": "idle", "to": "explore", "weight": 0.3, "condition": "stamina > 50 AND emotional_state != sadness AND emotional_state != fear"},
+        {"from": "idle", "to": "socialize", "weight": 0.2, "condition": "morale > 40 AND emotional_state == joy"},
+        {"from": "idle", "to": "rest", "weight": 0.5, "condition": "stamina < 30 OR emotional_state == sadness"},
+        {"from": "explore", "to": "gather", "weight": 0.4, "condition": "hunger > 50 OR thirst > 50"},
+        {"from": "explore", "to": "combat", "weight": 0.15, "condition": "health > 60 AND emotional_state == anger AND enemy_nearby"},
+        {"from": "explore", "to": "idle", "weight": 0.3, "condition": "stamina < 40"},
+        {"from": "socialize", "to": "gather", "weight": 0.3, "condition": "has_allies AND cooperativeness > 0.6"},
+        {"from": "socialize", "to": "share", "weight": 0.2, "condition": "has_allies AND benevolence > 0.7"},
+        {"from": "socialize", "to": "idle", "weight": 0.4, "condition": "true"},
+        {"from": "gather", "to": "share", "weight": 0.2, "condition": "resources_excess AND cooperativeness > 0.5"},
+        {"from": "gather", "to": "idle", "weight": 0.3, "condition": "true"},
+        {"from": "gather", "to": "combat", "weight": 0.25, "condition": "enemy_nearby AND emotional_state == anger"},
+        {"from": "combat", "to": "flee", "weight": 0.3, "condition": "health < 30 OR emotional_state == fear"},
+        {"from": "combat", "to": "idle", "weight": 0.3, "condition": "enemy_defeated"},
+        {"from": "combat", "to": "rest", "weight": 0.2, "condition": "stamina < 20"},
+        {"from": "rest", "to": "idle", "weight": 0.7, "condition": "stamina > 80 AND emotional_state != sadness"},
+        {"from": "rest", "to": "socialize", "weight": 0.1, "condition": "morale < 30 AND emotional_state == sadness"},
+        {"from": "flee", "to": "rest", "weight": 0.5, "condition": "stamina < 30"},
+        {"from": "flee", "to": "idle", "weight": 0.5, "condition": "safe"},
+        {"from": "share", "to": "socialize", "weight": 0.5, "condition": "true"},
+        {"from": "share", "to": "idle", "weight": 0.3, "condition": "stamina < 40"}
+      ]
+    },
+    {
+      "id": "RULE_012",
+      "name": "scene_graph_rule",
+      "type": "scene_graph",
+      "description": "Scene graph navigation rules",
+      "graph_nodes": [
+        {"id": "ENTRANCE", "type": "entry", "zone": "ZONE_001", "safe": true},
+        {"id": "HALL", "type": "hub", "zone": "ZONE_002", "safe": false},
+        {"id": "CHAMBER", "type": "destination", "zone": "ZONE_003", "safe": false},
+        {"id": "CORRIDOR", "type": "passage", "zone": "ZONE_004", "safe": false},
+        {"id": "EXIT", "type": "exit", "zone": "ZONE_005", "safe": true}
+      ],
+      "graph_edges": [
+        {"from": "ENTRANCE", "to": "HALL", "weight": 1.0, "condition": "door_open", "cost": 1},
+        {"from": "HALL", "to": "CHAMBER", "weight": 0.8, "condition": "has_key", "cost": 3},
+        {"from": "HALL", "to": "CORRIDOR", "weight": 0.5, "condition": "true", "cost": 2},
+        {"from": "CHAMBER", "to": "EXIT", "weight": 0.6, "condition": "boss_defeated", "cost": 5},
+        {"from": "CORRIDOR", "to": "EXIT", "weight": 0.7, "condition": "true", "cost": 2}
+      ],
+      "pathfinding": {
+        "algorithm": "dijkstra",
+        "heuristic": "cost_based"
+      }
     }
   ],
   "world_states_template": {
@@ -286,7 +486,13 @@
       "player_has_quest": false,
       "player_has_key": false,
       "dragon_defeated": false,
-      "king_saved": false
+      "king_saved": false,
+      "threat_nearby": false,
+      "ally_attacked": false,
+      "enemy_defeated": false,
+      "safe": true,
+      "door_open": false,
+      "boss_defeated": false
     },
     "scene_states": {},
     "global_timers": {

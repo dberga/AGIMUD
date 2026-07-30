@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SWM Run Server - Centralized server for multiple clients
+SWM Run Server - Centralized server rendering every single epoch 1 by 1 with full world folder support
 """
 
 import json
@@ -40,7 +40,7 @@ class NetworkMessage:
 
 
 class SWMServer:
-    """Centralized server for SWM"""
+    """Centralized server for SWM rendering every epoch with custom world folder support"""
     
     def __init__(self, config_file: str = "network_server_config.json", args: Any = None):
         self.config = self._load_config(config_file)
@@ -53,18 +53,28 @@ class SWMServer:
         self.render_interval = 1.0
         self.log_file = None
         
-        # Server socket
+        server_cfg = self.config.get('server', {'host': '127.0.0.1', 'port': 5000, 'max_clients': 10, 'update_interval': 1.0})
+        world_cfg = self.config.get('world', {'world_folder': 'world_centralized', 'default_fps': 1.0})
+        
+        self.host = server_cfg.get('host', '127.0.0.1')
+        self.port = server_cfg.get('port', 5000)
+        self.max_clients = server_cfg.get('max_clients', 10)
+        
+        # Support command-line world folder specification just like swm_run.py
+        arg_world = getattr(self.args, 'world', None)
+        if arg_world:
+            self.world_folder = arg_world
+        else:
+            self.world_folder = world_cfg.get('world_folder', 'world_centralized')
+            
+        self.default_fps = getattr(self.args, 'fps', None) or world_cfg.get('default_fps', 1.0)
         self.server_socket = None
         
-        # Use world folder from config or default
-        self.world_folder = self.config.get('world', {}).get('world_folder', 'world_centralized')
-        
-        # Ensure world folder exists
         if not os.path.exists(self.world_folder):
             os.makedirs(self.world_folder, exist_ok=True)
             print(f"[SERVER] Created world folder: {self.world_folder}")
         
-        print(f"[SERVER] Initialized on {self.config['server']['host']}:{self.config['server']['port']}")
+        print(f"[SERVER] Initialized on {self.host}:{self.port}")
         print(f"[SERVER] Using world folder: {self.world_folder}")
     
     def _load_config(self, config_file: str) -> Dict[str, Any]:
@@ -87,7 +97,6 @@ class SWMServer:
         }
     
     def _log(self, text: str):
-        """Write to log file in world folder"""
         if not self.world_folder:
             return
         log_filename = os.path.join(self.world_folder, "server.log")
@@ -98,20 +107,13 @@ class SWMServer:
             pass
     
     def _check_required_files(self, folder: str) -> bool:
-        """Check if required files exist in the world folder"""
         required = ["characters.json", "objects.json", "scenes.json", "rules.json", "world_states.json"]
-        missing = []
         for f in required:
             if not os.path.exists(os.path.join(folder, f)):
-                missing.append(f)
-        
-        if missing:
-            print(f"[INFO] Missing files in {folder}: {', '.join(missing)}")
-            return False
+                return False
         return True
     
     def _generate_world(self):
-        """Generate a new world using swm_generate.py"""
         try:
             print("[SERVER] Generating world...")
             result = subprocess.run(
@@ -123,23 +125,13 @@ class SWMServer:
             if result.returncode != 0:
                 print(f"[SERVER] Failed to generate world: {result.stderr}")
                 return False
-            
             print(f"[SERVER] World generated in {self.world_folder}")
             return True
         except Exception as e:
             print(f"[SERVER] Error generating world: {e}")
             return False
     
-    def _get_global_tick(self) -> int:
-        """Get the global tick (day_cycle) from the world state"""
-        if not self.world_runner:
-            return 0
-        ws = self.world_runner.world.world_states.to_dict()
-        timers = ws.get('global_timers', {})
-        return timers.get('day_cycle', 0)
-    
     def _render(self):
-        """Render the current world state to console"""
         if not self.world_runner:
             return
         
@@ -150,117 +142,90 @@ class SWMServer:
         global_tick = timers.get('day_cycle', 0)
         
         output = []
-        output.append("\n" + "="*60)
-        output.append(f"SERVER WORLD - EPOCH {global_tick}")
-        output.append(f"Clients: {len(self.clients)} | FPS: {self.world_runner.fps}")
+        output.append("\n" + "="*80)
+        output.append(f"SIMULATED WORLD - EPOCH {self.world_runner.tick_count}")
+        output.append(f"FPS: {self.world_runner.fps} | Clients: {len(self.clients)} | Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         output.append(f"World: {self.world_folder}")
-        output.append("="*60)
+        output.append("="*80)
         
-        # World State
         global_states = ws.get('global_states', {})
         output.append(f"\n[WORLD STATE]")
-        output.append(f"  Scene: {ws.get('current_scene', '?')}")
         output.append(f"  Weather: {global_states.get('weather', '?')}")
         output.append(f"  Time: {global_states.get('time_of_day', '?')}")
-        day_cycle = timers.get('day_cycle', 0)
-        output.append(f"  Day Cycle: {day_cycle // 60:02d}:{day_cycle % 60:02d}")
+        output.append(f"  Mood: {global_states.get('mood', 'combat')}")
+        output.append(f"  Day Cycle: {global_tick // 60:02d}:{global_tick % 60:02d}")
         
-        # Characters
         output.append(f"\n[CHARACTERS] ({len(chars)})")
-        for char in chars[:5]:
+        for char in chars:
             name = char.get('name', 'Unknown')
             ai_state = char.get('ai_state', 'IDLE')
+            goal = char.get('goal', 'social_belonging')
+            emotion = char.get('emotion', 'neutral')
             status = char.get('status_variables', {})
-            health = status.get('health', '?')
-            stamina = status.get('stamina', '?')
+            health = int(round(status.get('health', 100))) if isinstance(status.get('health'), (int, float)) else '?'
+            stamina = int(round(status.get('stamina', 100))) if isinstance(status.get('stamina'), (int, float)) else '?'
             location = char.get('navigation', {}).get('current_location', '?')
-            output.append(f"  {name} [{ai_state}] HP:{health} ST:{stamina} @ {location}")
-        if len(chars) > 5:
-            output.append(f"  ... and {len(chars) - 5} more")
+            output.append(f"  * {name} [{ai_state}] | Goal: {goal} | Emotion: {emotion} | HP:{health} | ST:{stamina} @ {location}")
         
-        # Objects
         output.append(f"\n[OBJECTS] ({len(objs)})")
         for obj in objs[:3]:
             name = obj.get('name', 'Unknown')
             props = obj.get('properties', {})
-            if isinstance(props, dict):
-                obj_type = props.get('type', 'item')
-                if isinstance(obj_type, dict):
-                    obj_type = obj_type.get('source', 'item')
-                    if isinstance(obj_type, dict):
-                        obj_type = 'item'
-            else:
-                obj_type = 'item'
+            obj_type = props.get('type', 'item') if isinstance(props, dict) else 'item'
             obj_vars = obj.get('object_variables', {})
-            durability = obj_vars.get('durability', '?')
-            if isinstance(durability, float):
-                durability = int(round(durability))
+            durability = int(round(obj_vars.get('durability', 0))) if isinstance(obj_vars.get('durability'), float) else obj_vars.get('durability', '?')
             quality = obj_vars.get('quality', 'standard')
-            output.append(f"  {name} ({obj_type}) [{quality}] Durability:{durability}")
+            output.append(f"  - {name} ({obj_type}) [{quality}] Durability:{durability}")
         if len(objs) > 3:
             output.append(f"  ... and {len(objs) - 3} more")
         
-        # Clients
         output.append(f"\n[CLIENTS] ({len(self.clients)})")
-        for client_id in list(self.clients.keys())[:5]:
+        for client_id in list(self.clients.keys()):
             output.append(f"  - {client_id}")
-        if len(self.clients) > 5:
-            output.append(f"  ... and {len(self.clients) - 5} more")
         
-        # Events
-        events = self.world_runner.event_history[-5:]
+        events = self.world_runner.event_history[-10:]
         if events:
             output.append(f"\n[RECENT EVENTS]")
             for event in events:
-                output.append(f"  - {event.get('text', '')[:80]}")
+                tick = event.get('tick', '?')
+                text = event.get('text', '')
+                output.append(f"  [{tick}] {text}")
         
-        output.append("\n" + "="*60)
-        output.append("Press Ctrl+C to stop")
+        output.append("\n" + "="*80)
         
-        # Print to console
-        for line in output:
-            print(line)
-        
-        # Log to file
-        for line in output:
-            self._log(line)
+        full_render_string = "\n".join(output)
+        print(full_render_string)
+        self._log(full_render_string)
+        sys.stdout.flush()
     
     def start(self):
-        """Start the server"""
         self.running = True
         
-        # Check if world files exist, if not, generate them
         if not self._check_required_files(self.world_folder):
-            print("[INFO] Generating world for server...")
-            if not self._generate_world():
-                print("[ERROR] Failed to generate world. Please run swm_generate.py manually.")
-                return
-            # Re-check after generation
-            if not self._check_required_files(self.world_folder):
-                print("[ERROR] World generation failed. Please run swm_generate.py manually.")
+            print(f"[INFO] Generating world for server in {self.world_folder}...")
+            if not self._generate_world() or not self._check_required_files(self.world_folder):
+                print("[ERROR] World setup failed.")
                 return
         
-        # Initialize world with the found folder
         load_existing = not getattr(self.args, 'new', False)
         self.world_runner = WorldRunner(
-            fps=self.config['world'].get('default_fps', 1.0),
+            fps=self.default_fps,
             load_existing=load_existing,
             world_folder=self.world_folder
         )
         
-        # Start server socket
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.server_socket.bind((self.config['server']['host'], self.config['server']['port']))
-        self.server_socket.listen(self.config['server'].get('max_clients', 10))
+        self.server_socket.bind((self.host, self.port))
+        self.server_socket.listen(self.max_clients)
         self.server_socket.setblocking(False)
         
-        print(f"[SERVER] Listening on {self.config['server']['host']}:{self.config['server']['port']}")
+        print(f"[SERVER] Listening on {self.host}:{self.port}")
         print("[SERVER] Press Ctrl+C to stop\n")
+        sys.stdout.flush()
         
         try:
             while self.running:
-                # Accept new connections
                 try:
                     client_socket, addr = self.server_socket.accept()
                     client_socket.setblocking(False)
@@ -271,30 +236,25 @@ class SWMServer:
                 except BlockingIOError:
                     pass
                 
-                # Handle client messages
                 self._handle_clients()
                 
-                # Update world
+                # Advance simulation by 1 epoch
                 self.world_runner._update_world()
                 
-                # Render periodically
-                current_time = time.time()
-                if current_time - self.last_render >= self.render_interval:
-                    self._render()
-                    self.last_render = current_time
+                # Render every single epoch 1 by 1
+                self._render()
                 
-                # Broadcast world state to clients
                 self._broadcast_world_state()
-                
-                time.sleep(0.1)
+                time.sleep(1.0 / self.world_runner.fps)
                 
         except KeyboardInterrupt:
             print("\n[SERVER] Shutting down...")
+            if self.world_runner:
+                self.world_runner._save_runtime_state()
         finally:
             self._cleanup()
     
     def _handle_clients(self):
-        """Handle messages from clients"""
         to_remove = []
         for client_id, sock in self.clients.items():
             try:
@@ -308,7 +268,6 @@ class SWMServer:
                     if msg_str:
                         msg = NetworkMessage.from_json(msg_str)
                         self._process_client_message(client_id, msg)
-                        
             except BlockingIOError:
                 continue
             except Exception as e:
@@ -324,12 +283,12 @@ class SWMServer:
                 print(f"[SERVER] Client disconnected: {client_id}")
     
     def _process_client_message(self, client_id: str, msg: NetworkMessage):
-        """Process a message from a client"""
         msg_type = msg.type
+        sec_cfg = self.config.get('security', {})
         
         if msg_type == "HELLO":
             api_key = msg.payload.get('api_key', '')
-            if self.config['security'].get('auth_required', False) and api_key != self.config['security'].get('api_key'):
+            if sec_cfg.get('auth_required', False) and api_key != sec_cfg.get('api_key'):
                 self._send_to_client(client_id, NetworkMessage("ERROR", {"message": "Authentication failed"}))
                 return
             
@@ -356,7 +315,6 @@ class SWMServer:
             self._send_to_client(client_id, NetworkMessage("PONG", {"timestamp": datetime.now().isoformat()}))
     
     def _send_to_client(self, client_id: str, msg: NetworkMessage):
-        """Send a message to a specific client"""
         if client_id in self.clients:
             try:
                 self.clients[client_id].sendall((msg.to_json() + '\n').encode('utf-8'))
@@ -364,40 +322,37 @@ class SWMServer:
                 print(f"[SERVER] Error sending to {client_id}: {e}")
     
     def _broadcast_world_state(self):
-        """Broadcast world state to all clients"""
         if not self.world_runner:
             return
         
-        # Broadcast every 5 ticks
-        if self.world_runner.tick_count % 5 == 0:
-            ws = self.world_runner.world.world_states.to_dict()
-            timers = ws.get('global_timers', {})
-            global_tick = timers.get('day_cycle', 0)
-            
-            msg = NetworkMessage("WORLD_UPDATE", {
-                "tick": self.world_runner.tick_count,
-                "global_tick": global_tick,
-                "world_state": ws,
-                "events": self.world_runner.event_history[-5:]
-            })
-            for client_id in self.clients:
-                self._send_to_client(client_id, msg)
+        ws = self.world_runner.world.world_states.to_dict()
+        timers = ws.get('global_timers', {})
+        global_tick = timers.get('day_cycle', 0)
+        
+        msg = NetworkMessage("WORLD_UPDATE", {
+            "tick": self.world_runner.tick_count,
+            "global_tick": global_tick,
+            "world_state": ws,
+            "characters": [c.to_dict() for c in self.world_runner.world.characters.get_all()],
+            "events": self.world_runner.event_history[-5:]
+        })
+        for client_id in self.clients:
+            self._send_to_client(client_id, msg)
     
     def _cleanup(self):
-        """Clean up server resources"""
         for client_id, sock in self.clients.items():
             sock.close()
         self.clients.clear()
         if self.server_socket:
             self.server_socket.close()
-        log_file = os.path.join(self.world_folder, "server.log")
-        print(f"[SERVER] Cleanup complete. Log saved to {log_file}")
+        print(f"[SERVER] Cleanup complete. Log saved to {os.path.join(self.world_folder, 'server.log')}")
 
 
 def main():
-    import argparse
     parser = argparse.ArgumentParser(description='SWM Centralized Server')
+    parser.add_argument('--fps', type=float, default=1.0, help='Frames per second (default: 1.0)')
     parser.add_argument('--new', action='store_true', help='Create a new world state (ignore existing)')
+    parser.add_argument('--world', type=str, help='Specify an existing world folder to load')
     args = parser.parse_args()
     
     print("="*60)

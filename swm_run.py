@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-SWM Run Module - Main runner with visualization loop
-All display and behavior from JSON files
+SWM Run Module - Main runner with full visualization loop, emotion tracking, 
+social reasoning, and rule-bound character actions.
+All display, behavior, emotions, and reasoning loaded dynamically from JSON files.
 """
 
 import json
@@ -11,14 +12,15 @@ import random
 import sys
 from datetime import datetime
 from typing import Dict, List, Any, Optional
+
 from swm import SimulatedWorldModule
 from swm_corpus_loader import DynamicEntity
 
 
 class WorldRunner:
-    """Main runner for the simulated world with visualization loop"""
+    """Main runner for the simulated world with emotion, reasoning, and rule-bound actions"""
     
-    def __init__(self, fps: float = 1.0, load_existing: bool = True, world_folder: str = None):
+    def __init__(self, fps: float = 1.0, load_existing: bool = True, world_folder: str = None, interact: bool = False):
         self.fps = fps
         self.tick_interval = 1.0 / fps
         self.running = False
@@ -27,6 +29,7 @@ class WorldRunner:
         self.event_history = []
         self.max_history = 100
         self.world_folder = world_folder
+        self.interact = interact
         
         # Load all configurations from JSON
         self.vocab = self._load_json("world_vocabulary.json")
@@ -42,10 +45,10 @@ class WorldRunner:
             print("[ERROR] No valid world folder found. Please run swm_generate.py first.")
             sys.exit(1)
         
-        # Load action catalog from root folder
+        # Load action catalog
         self.action_catalog = self._load_action_catalog()
         
-        # Load or create world
+        # Initialize Simulated World Module with full reasoning corpora
         self._initialize_world(load_existing)
         
         # Create log file in world folder
@@ -54,9 +57,10 @@ class WorldRunner:
         self.log_file = os.path.join(self.world_folder, f"{self.run_id}.log")
         self.log_lines = []
         
-        print(f"[INIT] World Runner initialized at {fps} FPS")
+        print(f"[INIT] World Runner initialized at {fps} FPS with Emotion & Social Reasoning Engine")
         print(f"[WORLD] Using world folder: {self.world_folder}")
         print(f"[LOG] Writing to {self.log_file}")
+        sys.stdout.flush()
         
     def _validate_world_folder(self) -> bool:
         """Validate that the world folder exists and contains required files"""
@@ -71,7 +75,6 @@ class WorldRunner:
             print(f"[ERROR] Path is not a directory: {self.world_folder}")
             return False
         
-        # Check for required files
         required_files = [
             "characters.json",
             "objects.json",
@@ -99,7 +102,6 @@ class WorldRunner:
         """Find the latest world folder"""
         world_folders = [d for d in os.listdir('.') if os.path.isdir(d) and d.startswith('world_')]
         if world_folders:
-            # Sort by name (which is timestamp) and get the latest
             world_folders.sort(reverse=True)
             print(f"[INFO] Found world folder: {world_folders[0]}")
             return world_folders[0]
@@ -109,7 +111,6 @@ class WorldRunner:
     
     def _load_json(self, filename: str) -> Dict[str, Any]:
         """Load JSON file with error handling"""
-        # Try to load from current directory first, then from world folder
         if os.path.exists(filename):
             try:
                 with open(filename, 'r', encoding='utf-8') as f:
@@ -118,7 +119,6 @@ class WorldRunner:
                 print(f"[ERROR] Failed to load {filename}: {e}")
                 return {}
         
-        # Try from world folder
         world_path = os.path.join(self.world_folder, filename) if self.world_folder else filename
         if os.path.exists(world_path):
             try:
@@ -128,7 +128,6 @@ class WorldRunner:
                 print(f"[ERROR] Failed to load {world_path}: {e}")
                 return {}
         
-        print(f"[WARNING] {filename} not found")
         return {}
     
     def _get_vocab(self, key: str, default: list = None) -> list:
@@ -152,9 +151,9 @@ class WorldRunner:
                 return default
         
         return current if current is not None else default
-    
+
     def _get_display_field(self, field_config: Dict[str, Any], ws: Dict[str, Any], 
-                          global_states: Dict, timers: Dict) -> str:
+                           global_states: Dict, timers: Dict) -> str:
         """Get a formatted display field from config"""
         key = field_config.get('key', '')
         label = field_config.get('label', key)
@@ -162,7 +161,6 @@ class WorldRunner:
         format_str = field_config.get('format', '{label}: {value}')
         transform = field_config.get('transform', '')
         
-        # Get value - handle nested paths
         if '.' in key:
             parts = key.split('.')
             if parts[0] == 'global_states':
@@ -174,11 +172,9 @@ class WorldRunner:
         else:
             value = ws.get(key, default)
         
-        # If value is None or default, try direct access
         if value is None or value == default:
             value = ws.get(key, default)
         
-        # Apply transform
         if transform == 'day_cycle':
             if isinstance(value, (int, float)):
                 hours = int(value // 60)
@@ -189,20 +185,13 @@ class WorldRunner:
         else:
             formatted = str(value) if value is not None and value != default else '?'
         
-        # Apply format
         try:
             return format_str.format(label=label, value=formatted)
         except:
             return f"{label}: {formatted}"
-    
-    def _log(self, text: str, console: bool = True):
-        """Log text to both console and log file"""
-        if console:
-            print(text)
-        self.log_lines.append(text)
-    
+
     def _flush_log(self):
-        """Write log to file"""
+        """Write log lines to file"""
         try:
             with open(self.log_file, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(self.log_lines))
@@ -210,7 +199,16 @@ class WorldRunner:
             print(f"[ERROR] Failed to write log: {e}")
     
     def _load_action_catalog(self) -> List[str]:
-        """Load action catalog from root folder"""
+        """Load action catalog from world folder or root"""
+        catalog_path = os.path.join(self.world_folder, "action_catalog.json")
+        if os.path.exists(catalog_path):
+            try:
+                with open(catalog_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    return data.get('action_catalog', [])
+            except Exception as e:
+                print(f"[ERROR] Failed to load {catalog_path}: {e}")
+        
         if os.path.exists("action_catalog.json"):
             try:
                 with open("action_catalog.json", 'r', encoding='utf-8') as f:
@@ -218,53 +216,48 @@ class WorldRunner:
                     return data.get('action_catalog', [])
             except Exception as e:
                 print(f"[ERROR] Failed to load action_catalog.json: {e}")
-                return []
-        else:
-            print("[WARNING] action_catalog.json not found, using defaults")
-            return [
-                "GATHER_ALL_RESOURCES_GREEDY",
-                "HARVEST_SUSTAINABLE_SHARED",
-                "NEGOTIATE_COOPERATIVE_PACT",
-                "IDLE_WAIT"
-            ]
+                
+        return [
+            "GATHER_ALL_RESOURCES_GREEDY",
+            "HARVEST_SUSTAINABLE_SHARED",
+            "NEGOTIATE_COOPERATIVE_PACT",
+            "IDLE_WAIT",
+            "ATTACK_ENEMY_GREEDY",
+            "SHARE_RESOURCES_WITH_ALLIES",
+            "HOARD_RESOURCES_SELFISHLY",
+            "PROPOSE_PEACE_TREATY",
+            "DECLARE_WAR_AGGRESSIVE"
+        ]
     
-    def _validate_action(self, action: str) -> bool:
-        """Check if an action is in the catalog"""
-        if not self.action_catalog:
-            return True  # If no catalog, allow all actions
-        return action in self.action_catalog
-    
-    def _get_random_action(self) -> str:
-        """Get a random action from the catalog"""
-        if self.action_catalog:
-            return random.choice(self.action_catalog)
-        return "IDLE_WAIT"
-        
     def _initialize_world(self, load_existing: bool):
-        """Initialize the world, loading existing state if available"""
-        # Get runtime state path in world folder
+        """Initialize the world with SWM module, loading existing runtime state if available"""
         runtime_path = os.path.join(self.world_folder, "world_state_runtime.json")
         
+        kwargs = {
+            'characters_file': os.path.join(self.world_folder, "characters.json"),
+            'objects_file': os.path.join(self.world_folder, "objects.json"),
+            'scenes_file': os.path.join(self.world_folder, "scenes.json"),
+            'rules_file': os.path.join(self.world_folder, "rules.json"),
+            'world_states_file': os.path.join(self.world_folder, "world_states.json")
+        }
+        
+        for opt_key, opt_filename in [
+            ('knowledge_file', 'knowledge_base.json'),
+            ('action_catalog_file', 'action_catalog.json'),
+            ('character_graph_file', 'character_graph.json'),
+            ('condition_registry_file', 'condition_registry.json')
+        ]:
+            path = os.path.join(self.world_folder, opt_filename)
+            if os.path.exists(path):
+                kwargs[opt_key] = path
+
         if load_existing and os.path.exists(runtime_path):
             print("[INFO] Loading existing world state from world_state_runtime.json")
-            # Load world from JSON files in world folder
-            self.world = SimulatedWorldModule(
-                characters_file=os.path.join(self.world_folder, "characters.json"),
-                objects_file=os.path.join(self.world_folder, "objects.json"),
-                scenes_file=os.path.join(self.world_folder, "scenes.json"),
-                rules_file=os.path.join(self.world_folder, "rules.json"),
-                world_states_file=os.path.join(self.world_folder, "world_states.json")
-            )
+            self.world = SimulatedWorldModule(**kwargs)
             self._load_runtime_state()
         else:
             print("[INFO] Creating new world state from JSON files")
-            self.world = SimulatedWorldModule(
-                characters_file=os.path.join(self.world_folder, "characters.json"),
-                objects_file=os.path.join(self.world_folder, "objects.json"),
-                scenes_file=os.path.join(self.world_folder, "scenes.json"),
-                rules_file=os.path.join(self.world_folder, "rules.json"),
-                world_states_file=os.path.join(self.world_folder, "world_states.json")
-            )
+            self.world = SimulatedWorldModule(**kwargs)
             self._record_initial_state()
             self._save_runtime_state()
     
@@ -298,17 +291,13 @@ class WorldRunner:
             else:
                 self._record_initial_state()
             
+            if 'tick_count' in runtime_data:
+                self.tick_count = runtime_data['tick_count']
+            
             print("[OK] Runtime state loaded successfully")
             
         except Exception as e:
             print(f"[ERROR] Failed to load runtime state: {e}")
-            self.world = SimulatedWorldModule(
-                characters_file=os.path.join(self.world_folder, "characters.json"),
-                objects_file=os.path.join(self.world_folder, "objects.json"),
-                scenes_file=os.path.join(self.world_folder, "scenes.json"),
-                rules_file=os.path.join(self.world_folder, "rules.json"),
-                world_states_file=os.path.join(self.world_folder, "world_states.json")
-            )
             self._record_initial_state()
             self._save_runtime_state()
     
@@ -340,8 +329,8 @@ class WorldRunner:
         
         for char in self.world.characters.get_all():
             name = char.get('name', 'Unknown')
-            faction = self._get_field_value(char, 'social_attributes.faction', 'Unknown')
-            location = self._get_field_value(char, 'navigation.current_location', 'Unknown')
+            faction = char.get('social_attributes', {}).get('faction', 'Unknown')
+            location = char.get('navigation', {}).get('current_location', 'Unknown')
             
             template = templates.get('character_entry', '[ENTRY] {character_name} enters the world')
             try:
@@ -352,8 +341,8 @@ class WorldRunner:
         
         for obj in self.world.objects.get_all():
             name = obj.get('name', 'Unknown')
-            obj_type = self._get_field_value(obj, 'properties.type', 'item')
-            quality = self._get_field_value(obj, 'object_variables.quality', 'standard')
+            obj_type = obj.get('properties', {}).get('type', 'item')
+            quality = obj.get('object_variables', {}).get('quality', 'standard')
             location = random.choice(locations) if locations else 'Unknown'
             
             template = templates.get('object_entry', '[ENTRY] An object appears')
@@ -362,22 +351,9 @@ class WorldRunner:
             except KeyError:
                 event = f"[ENTRY] {name} appears"
             self._add_event(event, 'entry', 'object', name)
-        
-        if self.world.scenes.count() > 0:
-            scene = self.world.scenes.get_entity(0)
-            scene_name = scene.get('current_scene', 'Unknown')
-            zones = scene.get('zones', [])
-            zone_names = [z.get('name', 'Unknown') for z in zones[:3]]
-            
-            template = templates.get('scene_entry', '[SCENE] Welcome to {scene_name}')
-            try:
-                event = template.format(scene_name=scene_name, zone_names=', '.join(zone_names))
-            except KeyError:
-                event = f"[SCENE] Welcome to {scene_name}"
-            self._add_event(event, 'scene', 'scene', scene_name)
     
     def _update_world(self):
-        """Update the world state for one tick"""
+        """Update world state, goals, emotions, and rule-bound actions for one tick"""
         self.tick_count += 1
         
         timers = self.world.world_states.get('global_timers', {})
@@ -388,14 +364,58 @@ class WorldRunner:
         self._update_time_of_day()
         self._process_global_events()
         
-        for char in self.world.characters.get_all():
+        chars = self.world.characters.get_all()
+        for char in chars:
+            if hasattr(self.world, 'update_goal_based_on_status'):
+                self.world.update_goal_based_on_status(char)
+            
+            if hasattr(self.world, 'select_next_behavior_state'):
+                next_state = self.world.select_next_behavior_state(char)
+                if next_state:
+                    self.world.set_behavior_state(char, next_state)
+            
             self._update_character(char)
-        
+            self._process_character_social_actions(char, chars)
+
         for obj in self.world.objects.get_all():
             self._update_object(obj)
         
         if self.tick_count % 10 == 0:
             self._save_runtime_state()
+
+    def _process_character_social_actions(self, char: DynamicEntity, all_chars: List[DynamicEntity]):
+        """Evaluate character actions against rules and social relationships (e.g., War/Alliances)"""
+        if not self.action_catalog:
+            return
+            
+        if random.random() < 0.12:
+            action = random.choice(self.action_catalog)
+            char_name = char.get('name', 'Unknown')
+            location = char.get('navigation', {}).get('current_location', 'Unknown')
+            
+            target_char = None
+            social_actions = ["DECLARE_WAR_AGGRESSIVE", "PROPOSE_PEACE_TREATY", "NEGOTIATE_COOPERATIVE_PACT", "SHARE_RESOURCES_WITH_ALLIES", "ATTACK_ENEMY_GREEDY"]
+            
+            if action in social_actions and len(all_chars) > 1:
+                potential_targets = [c for c in all_chars if c.get('name') != char_name]
+                if potential_targets:
+                    target_char = random.choice(potential_targets)
+            
+            validated_action = action
+            if hasattr(self.world, 'reasoning_engine') and self.world.reasoning_engine:
+                try:
+                    if hasattr(self.world.reasoning_engine, 'system_rules') and self.world.reasoning_engine.system_rules:
+                        validated_action = self.world.reasoning_engine.system_rules.validate_and_filter_action(action)
+                except Exception:
+                    pass
+
+            if target_char:
+                target_name = target_char.get('name', 'Unknown')
+                msg = f"[SOCIAL ACTION] {char_name} targets {target_name} with '{validated_action}' at {location}"
+                self._add_event(msg, 'social_action', 'character', char_name)
+            else:
+                msg = f"[ACTION] {char_name} executes '{validated_action}' at {location}"
+                self._add_event(msg, 'action', 'character', char_name)
     
     def _update_time_of_day(self):
         """Update time of day using world_dynamics.json"""
@@ -470,7 +490,7 @@ class WorldRunner:
         event_id = event_config.get('id', 'event')
         
         if event_id == 'character_action':
-            action = self._get_random_action()
+            action = random.choice(self.action_catalog) if self.action_catalog else "IDLE_WAIT"
             chars = self.world.characters.get_all()
             if chars:
                 char = random.choice(chars)
@@ -480,7 +500,6 @@ class WorldRunner:
                 self._add_event(message, event_id, 'world')
                 return
         
-        # Regular event processing
         message = self._build_event_message(event_config)
         self._add_event(message, event_id, 'world')
         
@@ -647,27 +666,22 @@ class WorldRunner:
         if cond_type == 'tick_mod':
             mod = condition.get('mod', 10)
             return self.tick_count % mod == 0
-        
         elif cond_type == 'status_less_than':
             target = condition.get('target')
             threshold = condition.get('threshold', 50)
             return status.get(target, 0) < threshold
-        
         elif cond_type == 'status_greater_than':
             target = condition.get('target')
             threshold = condition.get('threshold', 50)
             return status.get(target, 0) > threshold
-        
         elif cond_type == 'random_chance':
             threshold = condition.get('threshold', 0.5)
             return random.random() < threshold
-        
         elif cond_type == 'and':
             for cond in condition.get('conditions', []):
                 if not self._evaluate_ai_condition(cond, char, status):
                     return False
             return True
-        
         elif cond_type == 'or':
             for cond in condition.get('conditions', []):
                 if self._evaluate_ai_condition(cond, char, status):
@@ -734,7 +748,7 @@ class WorldRunner:
         return str(value)
     
     def _render(self):
-        """Render the current world state using display config from world_dynamics.json"""
+        """Render current world state including character emotions, goals, and reasoning states"""
         display = self.dynamics.get('display', {})
         header_width = display.get('header_width', 80)
         separator = display.get('header_separator', '=')
@@ -747,11 +761,9 @@ class WorldRunner:
         output_lines.append(f"World: {self.world_folder}")
         output_lines.append(separator * header_width)
         
-        # World State - from display config
         ws = self.world.world_states.to_dict()
         global_states = ws.get('global_states', {})
         timers = ws.get('global_timers', {})
-        player_state = ws.get('player_state', {})
         
         world_state_display = display.get('world_state_display', {})
         output_lines.append(f"\n[{world_state_display.get('label', 'WORLD STATE')}]")
@@ -760,247 +772,247 @@ class WorldRunner:
             formatted = self._get_display_field(field, ws, global_states, timers)
             output_lines.append(f"  {formatted}")
         
-        # User State - from display config
-        user_state_display = display.get('user_state_display', {})
-        if user_state_display:
-            output_lines.append(f"\n[{user_state_display.get('label', 'USER STATE')}]")
-            for field in user_state_display.get('fields', []):
-                key = field.get('key', '')
-                label = field.get('label', key)
-                default = field.get('default', 'Unknown')
-                format_str = field.get('format', '{label}: {value}')
-                
-                if key.startswith('player_state.'):
-                    parts = key.split('.')
-                    value = player_state.get(parts[1], default)
-                else:
-                    value = ws.get(key, default)
-                
-                formatted = str(value) if value is not None and value != 'Unknown' else '?'
-                try:
-                    output_lines.append(f"  {format_str.format(label=label, value=formatted)}")
-                except:
-                    output_lines.append(f"  {label}: {formatted}")
-        
-        # Scene Information - from scene data
-        output_lines.append("\n[SCENE INFORMATION]")
-        if self.world.scenes.count() > 0:
-            scene_entity = self.world.scenes.get_entity(0)
-            if scene_entity:
-                scene_dict = scene_entity.to_dict()
-                if 'scenes' in scene_dict and isinstance(scene_dict['scenes'], dict):
-                    scene_data = scene_dict['scenes']
-                else:
-                    scene_data = scene_dict
-                
-                scene_name = scene_data.get('current_scene', 'Unknown')
-                if not scene_name or scene_name == 'Unknown':
-                    scene_name = scene_entity.get('current_scene', '?')
-                
-                output_lines.append(f"  Name: {scene_name if scene_name and scene_name != 'Unknown' else '?'}")
-                
-                regions = scene_data.get('world_regions', [])
-                if regions:
-                    output_lines.append(f"  Regions ({len(regions)}):")
-                    for region in regions:
-                        region_name = region.get('name', 'Unknown')
-                        climate = region.get('climate', 'Unknown')
-                        terrain = region.get('terrain_type', 'Unknown')
-                        output_lines.append(f"    - {region_name} ({climate}, {terrain})")
-                
-                zones = scene_data.get('zones', [])
-                if zones:
-                    output_lines.append(f"  Zones ({len(zones)}):")
-                    for zone in zones:
-                        name = zone.get('name', 'Unknown')
-                        zone_type = zone.get('zone_type', 'N/A')
-                        safe = "Safe" if zone.get('safe_zone', False) else "Dangerous"
-                        output_lines.append(f"    - {name} ({zone_type}) [{safe}]")
-                
-                buildings = scene_data.get('buildings_containers', [])
-                if buildings:
-                    output_lines.append(f"  Buildings ({len(buildings)}):")
-                    for building in buildings:
-                        bname = building.get('name', 'Unknown')
-                        floors = building.get('floors', '?')
-                        rooms = building.get('rooms', [])
-                        output_lines.append(f"    - {bname} ({floors} floors, {len(rooms)} rooms)")
-                
-                waypoints = scene_data.get('waypoints', [])
-                if waypoints:
-                    output_lines.append(f"  Waypoints ({len(waypoints)}):")
-                    for wp in waypoints[:5]:
-                        name = wp.get('name', 'Unknown')
-                        output_lines.append(f"    - {name}")
-            else:
-                output_lines.append("  Scene entity is empty")
-        else:
-            output_lines.append("  No scene data loaded")
-        
-        # Characters
+        # Characters with Emotions, Goals, and AI States
         char_display = display.get('character_display', {})
         chars = self.world.characters.get_all()
-        output_lines.append(f"\n[{char_display.get('label', 'CHARACTERS')}] {char_display.get('count_format', '({count})').format(count=len(chars))}")
+        output_lines.append(f"\n[{char_display.get('label', 'CHARACTERS')}] ({len(chars)})")
         
         for char in chars:
             name = char.get('name', 'Unknown')
             ai_state = char.get('ai_state', 'IDLE')
+            
+            goal = self.world.get_current_goal(char) if hasattr(self.world, 'get_current_goal') else 'unknown'
+            emotion = self.world.get_character_emotion(char) if hasattr(self.world, 'get_character_emotion') else 'neutral'
+            
             status = char.get('status_variables', {})
             health = self._format_value(status.get('health', '?')) if status else '?'
             stamina = self._format_value(status.get('stamina', '?')) if status else '?'
-            location = char.get('navigation', {}).get('current_location', 'Unknown')
-            location = location if location and location != 'Unknown' else '?'
+            location = char.get('navigation', {}).get('current_location', '?')
             
-            item_format = char_display.get('item_format', '')
-            if item_format:
-                try:
-                    display_str = item_format.format(
-                        name=name,
-                        ai_state=ai_state,
-                        health=health,
-                        stamina=stamina,
-                        location=location
-                    )
-                except KeyError:
-                    display_str = f"{name} [{ai_state}] HP:{health} ST:{stamina} @ {location}"
-            else:
-                display_str = f"{name} [{ai_state}] HP:{health} ST:{stamina} @ {location}"
-            
-            contained = char.get('contained_objects', [])
-            if contained:
-                display_str += f" [Carrying: {', '.join(contained)}]"
-            
-            output_lines.append(f"  {display_str}")
+            output_lines.append(f"  * {name} [{ai_state}] | Goal: {goal} | Emotion: {emotion} | HP:{health} | ST:{stamina} @ {location}")
         
-        # Objects
-        obj_display = display.get('object_display', {})
-        objs = self.world.objects.get_all()
-        output_lines.append(f"\n[{obj_display.get('label', 'OBJECTS')}] {obj_display.get('count_format', '({count})').format(count=len(objs))}")
-        
-        for obj in objs:
-            name = obj.get('name', 'Unknown')
-            obj_type = self._get_field_value(obj, 'properties.type', 'item')
-            obj_vars = obj.get('object_variables', {})
-            durability = self._format_value(obj_vars.get('durability', '?')) if obj_vars else '?'
-            quality = obj_vars.get('quality', 'standard') if obj_vars else 'standard'
-            
-            item_format = obj_display.get('item_format', '')
-            if item_format:
-                try:
-                    display_str = item_format.format(
-                        name=name,
-                        type=obj_type,
-                        durability=durability,
-                        quality=quality
-                    )
-                except KeyError:
-                    display_str = f"{name} ({obj_type}) [{quality}] Durability:{durability}"
-            else:
-                display_str = f"{name} ({obj_type}) [{quality}] Durability:{durability}"
-            
-            contained = obj.get('contained_objects', [])
-            if contained:
-                display_str += f" [Contains: {', '.join(contained)}]"
-            
-            output_lines.append(f"  {display_str}")
-        
-        # Events
+        # Recent Events
         events_display = display.get('events_display', {})
         max_events = events_display.get('max_display', 10)
-        
-        output_lines.append(f"\n[{events_display.get('label', 'RECENT EVENTS')}] {events_display.get('count_format', '(last {count})').format(count=min(max_events, len(self.event_history)))}")
+        output_lines.append(f"\n[{events_display.get('label', 'RECENT EVENTS')}]")
         
         for event in self.event_history[-max_events:]:
             tick = event.get('tick', '?')
             text = event.get('text', '')
-            timestamp = event.get('timestamp', '')
-            try:
-                dt = datetime.fromisoformat(timestamp)
-                timestamp = dt.strftime(events_display.get('timestamp_format', '%H:%M:%S'))
-            except:
-                timestamp = '??:??:??'
-            
-            item_format = events_display.get('item_format', '[{tick:4d}] {timestamp} - {text}')
-            try:
-                output_lines.append(f"  {item_format.format(tick=tick, timestamp=timestamp, text=text)}")
-            except:
-                output_lines.append(f"  [{tick:4d}] {text}")
+            output_lines.append(f"  [{tick}] {text}")
         
-        # Controls
-        controls_display = display.get('controls_display', {})
-        output_lines.append(f"\n[{controls_display.get('label', 'CONTROLS')}]")
-        
-        control_items = controls_display.get('items', [])
-        control_parts = []
-        for item in control_items:
-            key = item.get('key', '')
-            description = item.get('description', '')
-            format_str = controls_display.get('format', '[{key}] {description}')
-            control_parts.append(format_str.format(key=key, description=description))
-        
-        separator_str = controls_display.get('separator', ' | ')
-        output_lines.append(f"  {separator_str.join(control_parts)}")
         output_lines.append(separator * header_width)
         
-        # Print to console
         for line in output_lines:
             print(line)
         
-        # Save to log
         self.log_lines.extend(output_lines)
         self._flush_log()
-    
-    def _handle_input(self):
-        """Handle keyboard input - only Ctrl+C to quit"""
-        try:
-            import msvcrt
-            if msvcrt.kbhit():
-                key = msvcrt.getch()
-                if key == b'\x03':
-                    print("\n[Saving state and quitting...]")
-                    self._save_runtime_state()
-                    self.running = False
-                    return
-        except:
-            pass
-    
+        sys.stdout.flush()
+
     def run(self):
-        """Run the main loop"""
+        """Run the main visualization loop or interactive shell mode"""
         self.running = True
-        print(f"[START] World running at {self.fps} FPS")
-        print("Press Ctrl+C to save and quit")
-        time.sleep(1)
         
-        try:
+        if self.interact:
+            print("\n" + "="*70)
+            print("INTERACTIVE SHELL MODE ACTIVE")
+            print("Commands: [Enter] (step 1 tick), summary, catalog, list,")
+            print("          action <Name> <ACTION>, set char <Name> <var> <val>, exit")
+            print("="*70)
+            sys.stdout.flush()
+            
             while self.running:
-                start_time = time.time()
-                
-                self._update_world()
-                self._render()
-                self._handle_input()
-                
-                elapsed = time.time() - start_time
-                sleep_time = max(0, self.tick_interval - elapsed)
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
-                
-        except KeyboardInterrupt:
-            print("\n[STOP] Saving state before exit...")
-            self._save_runtime_state()
-            self._flush_log()
-            print(f"[OK] World state saved. Ran for {self.tick_count} epochs")
-            print(f"[OK] Log saved to {self.log_file}")
+                try:
+                    sys.stdout.write("\nswm-interactive> ")
+                    sys.stdout.flush()
+                    
+                    cmd = sys.stdin.readline()
+                    if not cmd:
+                        break
+                    cmd = cmd.strip()
+                    
+                    if not cmd:
+                        self._update_world()
+                        print(f"[OK] Advanced to Epoch {self.tick_count}. (Type 'summary' to view states)")
+                        sys.stdout.flush()
+                        continue
+                    
+                    parts = cmd.split()
+                    command = parts[0].lower()
+                    
+                    if command in ['q', 'quit', 'exit']:
+                        print("\n[STOP] Saving state and shutting down...")
+                        self._save_runtime_state()
+                        self._flush_log()
+                        break
+                        
+                    elif command == 'help':
+                        print("\n" + "="*60)
+                        print("INTERACTIVE COMMAND MENU")
+                        print("="*60)
+                        print("  [Enter]                         - Step forward 1 simulation epoch")
+                        print("  summary                         - Print full world and character status summary")
+                        print("  help                            - Show this help menu")
+                        print("  catalog                         - List all available actions in catalog")
+                        print("  list                            - List all characters, states, and HP")
+                        print("  action <Name> <ACTION>          - Force character action intent")
+                        print("  set char <Name> <var> <val>     - Modify character status variable")
+                        print("  set world <key> <val>           - Modify global world state")
+                        print("  quit / exit / q                 - Save and exit")
+                        print("="*60)
+                        sys.stdout.flush()
+                        
+                    elif command == 'summary':
+                        self._render()
+                        
+                    elif command == 'catalog':
+                        print("\n[ACTION CATALOG]")
+                        for idx, act in enumerate(self.action_catalog, 1):
+                            print(f"  {idx}. {act}")
+                        sys.stdout.flush()
+                            
+                    elif command == 'list':
+                        print("\n[CHARACTERS]")
+                        for c in self.world.characters.get_all():
+                            status = c.get('status_variables', {})
+                            print(f"  - {c.get('name')} | State: {c.get('ai_state')} | HP: {status.get('health')} | Location: {c.get('navigation', {}).get('current_location')}")
+                        sys.stdout.flush()
+                            
+                    elif command == 'action':
+                        if len(parts) < 3:
+                            print("[ERROR] Usage: action <CharacterName> <ACTION_NAME>")
+                            sys.stdout.flush()
+                            continue
+                        char_name = parts[1]
+                        action_intent = parts[2].upper()
+                        
+                        if self.action_catalog and action_intent not in self.action_catalog:
+                            print(f"[ERROR] '{action_intent}' is invalid. Type 'catalog' to check valid actions.")
+                            sys.stdout.flush()
+                            continue
+                        
+                        target_char = next((c for c in self.world.characters.get_all() if c.get('name', '').lower() == char_name.lower()), None)
+                        if target_char:
+                            loc = target_char.get('navigation', {}).get('current_location', 'Unknown')
+                            msg = f"[ACTION] {target_char.get('name')} performs '{action_intent}' at {loc}"
+                            self._add_event(msg, 'user_action', 'character', target_char.get('name'))
+                            print(f"[OK] {msg}")
+                        else:
+                            print(f"[ERROR] Character '{char_name}' not found.")
+                        sys.stdout.flush()
+                            
+                    elif command == 'set':
+                        if len(parts) < 4:
+                            print("[ERROR] Usage: set char <Name> <var> <val> OR set world <key> <val>")
+                            sys.stdout.flush()
+                            continue
+                        sub_target = parts[1].lower()
+                        
+                        if sub_target == 'char':
+                            if len(parts) < 5:
+                                print("[ERROR] Usage: set char <CharacterName> <variable> <value>")
+                                sys.stdout.flush()
+                                continue
+                            char_name = parts[2]
+                            var_name = parts[3]
+                            val_str = parts[4]
+                            
+                            target_char = next((c for c in self.world.characters.get_all() if c.get('name', '').lower() == char_name.lower()), None)
+                            if target_char:
+                                status = target_char.get('status_variables', {})
+                                if var_name in status:
+                                    try:
+                                        orig_val = status[var_name]
+                                        if isinstance(orig_val, bool):
+                                            new_val = val_str.lower() in ['true', '1', 'yes']
+                                        elif isinstance(orig_val, int):
+                                            new_val = int(val_str)
+                                        elif isinstance(orig_val, float):
+                                            new_val = float(val_str)
+                                        else:
+                                            new_val = val_str
+                                        
+                                        status[var_name] = new_val
+                                        target_char.set('status_variables', status)
+                                        print(f"[OK] Set {target_char.get('name')}'s {var_name} to {new_val}")
+                                        self._add_event(f"[ADMIN] Set {target_char.get('name')}'s {var_name} to {new_val}", 'admin', 'character', target_char.get('name'))
+                                    except ValueError:
+                                        print(f"[ERROR] Invalid number format for value '{val_str}'.")
+                                else:
+                                    print(f"[ERROR] Status variable '{var_name}' not found.")
+                            else:
+                                print(f"[ERROR] Character '{char_name}' not found.")
+                                
+                        elif sub_target == 'world':
+                            key = parts[2]
+                            val_str = parts[3]
+                            try:
+                                if val_str.lower() in ['true', 'false']:
+                                    new_val = val_str.lower() == 'true'
+                                else:
+                                    try:
+                                        new_val = float(val_str) if '.' in val_str else int(val_str)
+                                    except ValueError:
+                                        new_val = val_str
+                                        
+                                self.world.world_states.set(key, new_val)
+                                print(f"[OK] Set world state '{key}' to {new_val}")
+                                self._add_event(f"[ADMIN] Set world state '{key}' to {new_val}", 'admin', 'world')
+                            except Exception as e:
+                                print(f"[ERROR] Failed to set world state: {e}")
+                        else:
+                            print("[ERROR] Unknown set target. Use 'set char' or 'set world'.")
+                        sys.stdout.flush()
+                    else:
+                        print(f"[ERROR] Unknown command '{command}'. Type 'help' for options.")
+                        sys.stdout.flush()
+                        
+                except (KeyboardInterrupt, EOFError):
+                    print("\n[STOP] Saving state before exit...")
+                    self._save_runtime_state()
+                    self._flush_log()
+                    break
+        else:
+            print(f"[START] World running automatically at {self.fps} FPS")
+            print("Press Ctrl+C to save and quit")
+            time.sleep(1)
+            
+            try:
+                while self.running:
+                    start_time = time.time()
+                    
+                    self._update_world()
+                    self._render()
+                    
+                    elapsed = time.time() - start_time
+                    sleep_time = max(0, self.tick_interval - elapsed)
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
+                        
+            except KeyboardInterrupt:
+                print("\n[STOP] Saving state before exit...")
+                self._save_runtime_state()
+                self._flush_log()
+                print(f"[OK] World state saved. Ran for {self.tick_count} epochs")
+                print(f"[OK] Log saved to {self.log_file}")
 
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description='Run the simulated world with visualization')
+    parser = argparse.ArgumentParser(description='Run the simulated world with visualization and interactivity')
     parser.add_argument('--fps', type=float, default=1.0, help='Frames per second (default: 1.0)')
     parser.add_argument('--new', action='store_true', help='Create a new world state (ignore existing)')
     parser.add_argument('--world', type=str, help='Specify a world folder to load')
+    parser.add_argument('--interact', action='store_true', help='Enable interactive shell command mode')
     args = parser.parse_args()
     
-    runner = WorldRunner(fps=args.fps, load_existing=not args.new, world_folder=args.world)
+    runner = WorldRunner(
+        fps=args.fps, 
+        load_existing=not args.new, 
+        world_folder=args.world,
+        interact=args.interact
+    )
     runner.run()
 
 
