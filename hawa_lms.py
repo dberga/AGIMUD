@@ -9,6 +9,9 @@
 # Hide reasoning for models with reasoning (only wait and show final answer)
 # python hawa_lms.py --mode sync_stream -q "What is AI?" --no-reasoning
 
+## With system prompts (context/system instructions)
+#python hawa_lms.py --mode sync_stream --system-prompt "You are a helpful assistant. Answer concisely." -q "What is AI?"
+
 ## Completion mode (Text to complete)
 #python hawa_lms.py --mode complete -p "Once upon a time,"
 
@@ -137,7 +140,7 @@ class LMChat:
         
         print("\n")  # New line after completion
     
-    def sync_chat(self, question: str, predict_config: Optional[dict] = None) -> str:
+    def sync_chat(self, question: str, system_prompt: Optional[str] = None, predict_config: Optional[dict] = None) -> str:
         """Synchronous chat with the model (non-streaming)"""
         with lms.Client() as client:
             model_key = self.model_key or self.get_last_model()
@@ -146,13 +149,22 @@ class LMChat:
                 print(f"Load config: {self.load_config}")
             model = client.llm.model(model_key, config=self.load_config)
             print(f"Question: {question}")
+            
+            # Create chat with system prompt if provided
+            if system_prompt:
+                print(f"System prompt: {system_prompt}")
+                chat = lms.Chat(system_prompt)
+            else:
+                chat = lms.Chat()
+            
+            chat.add_user_message(question)
             print("Thinking...")
             if predict_config:
                 print(f"Prediction config: {predict_config}")
-            result = model.respond(question, config=predict_config)
+            result = model.respond(chat, config=predict_config)
             return result
     
-    def sync_stream_chat(self, question: str, show_reasoning: bool = True, predict_config: Optional[dict] = None) -> None:
+    def sync_stream_chat(self, question: str, show_reasoning: bool = True, system_prompt: Optional[str] = None, predict_config: Optional[dict] = None) -> None:
         """Synchronous chat with streaming response - handles DeepSeek reasoning properly"""
         with lms.Client() as client:
             model_key = self.model_key or self.get_last_model()
@@ -161,6 +173,16 @@ class LMChat:
                 print(f"Load config: {self.load_config}")
             model = client.llm.model(model_key, config=self.load_config)
             print(f"Question: {question}")
+            
+            # Create chat with system prompt if provided
+            if system_prompt:
+                print(f"System prompt: {system_prompt}")
+                chat = lms.Chat(system_prompt)
+            else:
+                chat = lms.Chat()
+            
+            chat.add_user_message(question)
+            
             if predict_config:
                 print(f"Prediction config: {predict_config}")
             
@@ -168,7 +190,7 @@ class LMChat:
             in_reasoning = False
             is_first_content = True
             
-            for fragment in model.respond_stream(question, config=predict_config):
+            for fragment in model.respond_stream(chat, config=predict_config):
                 # If fragment is a string or has content attribute
                 if isinstance(fragment, str):
                     content = fragment
@@ -220,7 +242,7 @@ class LMChat:
             
             print("\n")  # New line after response
     
-    async def async_chat(self, question: str, predict_config: Optional[dict] = None) -> str:
+    async def async_chat(self, question: str, system_prompt: Optional[str] = None, predict_config: Optional[dict] = None) -> str:
         """Asynchronous chat with the model (non-streaming)"""
         async with lms.AsyncClient() as client:
             model_key = self.model_key or self.get_last_model()
@@ -229,13 +251,22 @@ class LMChat:
                 print(f"Load config: {self.load_config}")
             model = await client.llm.model(model_key, config=self.load_config)
             print(f"Question: {question}")
+            
+            # Create chat with system prompt if provided
+            if system_prompt:
+                print(f"System prompt: {system_prompt}")
+                chat = lms.Chat(system_prompt)
+            else:
+                chat = lms.Chat()
+            
+            chat.add_user_message(question)
             print("Thinking...")
             if predict_config:
                 print(f"Prediction config: {predict_config}")
-            result = await model.respond(question, config=predict_config)
+            result = await model.respond(chat, config=predict_config)
             return result
     
-    async def async_stream_chat(self, question: str, show_reasoning: bool = True, predict_config: Optional[dict] = None) -> None:
+    async def async_stream_chat(self, question: str, show_reasoning: bool = True, system_prompt: Optional[str] = None, predict_config: Optional[dict] = None) -> None:
         """Asynchronous chat with streaming response - handles DeepSeek reasoning properly"""
         async with lms.AsyncClient() as client:
             model_key = self.model_key or self.get_last_model()
@@ -244,6 +275,16 @@ class LMChat:
                 print(f"Load config: {self.load_config}")
             model = await client.llm.model(model_key, config=self.load_config)
             print(f"Question: {question}")
+            
+            # Create chat with system prompt if provided
+            if system_prompt:
+                print(f"System prompt: {system_prompt}")
+                chat = lms.Chat(system_prompt)
+            else:
+                chat = lms.Chat()
+            
+            chat.add_user_message(question)
+            
             if predict_config:
                 print(f"Prediction config: {predict_config}")
             
@@ -251,7 +292,7 @@ class LMChat:
             in_reasoning = False
             is_first_content = True
             
-            async for fragment in model.respond_stream(question, config=predict_config):
+            async for fragment in model.respond_stream(chat, config=predict_config):
                 # If fragment is a string or has content attribute
                 if isinstance(fragment, str):
                     content = fragment
@@ -303,20 +344,39 @@ class LMChat:
             
             print("\n")  # New line after response
     
-    def convenience_chat(self, question: str, predict_config: Optional[dict] = None) -> str:
+    def convenience_chat(self, question: str, system_prompt: Optional[str] = None, predict_config: Optional[dict] = None) -> str:
         """Convenience method using lms.llm() (non-streaming)"""
         model = self.get_model()
         print(f"Question: {question}")
+        
+        # Create chat with system prompt if provided
+        if system_prompt:
+            print(f"System prompt: {system_prompt}")
+            chat = lms.Chat(system_prompt)
+        else:
+            chat = lms.Chat()
+        
+        chat.add_user_message(question)
         print("Thinking...")
         if predict_config:
             print(f"Prediction config: {predict_config}")
-        result = model.respond(question, config=predict_config)
+        result = model.respond(chat, config=predict_config)
         return result
     
-    def convenience_stream_chat(self, question: str, show_reasoning: bool = True, predict_config: Optional[dict] = None) -> None:
+    def convenience_stream_chat(self, question: str, show_reasoning: bool = True, system_prompt: Optional[str] = None, predict_config: Optional[dict] = None) -> None:
         """Convenience method with streaming - handles DeepSeek reasoning properly"""
         model = self.get_model()
         print(f"Question: {question}")
+        
+        # Create chat with system prompt if provided
+        if system_prompt:
+            print(f"System prompt: {system_prompt}")
+            chat = lms.Chat(system_prompt)
+        else:
+            chat = lms.Chat()
+        
+        chat.add_user_message(question)
+        
         if predict_config:
             print(f"Prediction config: {predict_config}")
         
@@ -324,7 +384,7 @@ class LMChat:
         in_reasoning = False
         is_first_content = True
         
-        for fragment in model.respond_stream(question, config=predict_config):
+        for fragment in model.respond_stream(chat, config=predict_config):
             # If fragment is a string or has content attribute
             if isinstance(fragment, str):
                 content = fragment
@@ -376,10 +436,16 @@ class LMChat:
         
         print("\n")
     
-    def chat_with_history(self, messages: List[Tuple[str, str]]) -> str:
+    def chat_with_history(self, messages: List[Tuple[str, str]], system_prompt: Optional[str] = None) -> str:
         """Chat with conversation history"""
         model = self.get_model()
-        chat = lms.Chat("You are a helpful shopkeeper assisting a foreign traveller")
+        
+        # Initialize chat with system prompt if provided
+        if system_prompt:
+            print(f"System prompt: {system_prompt}")
+            chat = lms.Chat(system_prompt)
+        else:
+            chat = lms.Chat("You are a helpful shopkeeper assisting a foreign traveller")
         
         for user_msg, assistant_msg in messages:
             chat.add_user_message(user_msg)
@@ -401,17 +467,17 @@ class LMChat:
             print(f"Image prepared successfully. File handle: {file_handle}")
             return str(file_handle)
     
-    def chat_with_file(self, file_path: str, question: str, predict_config: Optional[dict] = None) -> str:
+    def chat_with_file(self, file_path: str, question: str, system_prompt: Optional[str] = None, predict_config: Optional[dict] = None) -> str:
         """Chat about a text file's contents"""
         content = self.read_text_file(file_path)
         prompt = f"Here is the content of a file:\n\n{content}\n\nQuestion: {question}"
-        return self.convenience_chat(prompt, predict_config)
+        return self.convenience_chat(prompt, system_prompt, predict_config)
     
-    def stream_chat_with_file(self, file_path: str, question: str, show_reasoning: bool = True, predict_config: Optional[dict] = None) -> None:
+    def stream_chat_with_file(self, file_path: str, question: str, show_reasoning: bool = True, system_prompt: Optional[str] = None, predict_config: Optional[dict] = None) -> None:
         """Chat about a text file's contents with streaming"""
         content = self.read_text_file(file_path)
         prompt = f"Here is the content of a file:\n\n{content}\n\nQuestion: {question}"
-        self.convenience_stream_chat(prompt, show_reasoning, predict_config)
+        self.convenience_stream_chat(prompt, show_reasoning, system_prompt, predict_config)
 
 def build_prediction_config(args):
     """Build inference configuration from command line arguments"""
@@ -453,6 +519,9 @@ Examples:
   # Basic chat with default settings
   python hawa_lms.py --mode sync -q "What is AI?"
   
+  # Chat with system prompt
+  python hawa_lms.py --mode sync --system-prompt "You are a helpful assistant. Answer concisely." -q "What is AI?"
+  
   # Chat with temperature and token limit
   python hawa_lms.py --mode sync_stream -q "Tell a story" --temperature 0.8 --max-tokens 300
   
@@ -469,7 +538,7 @@ Examples:
   python hawa_lms.py --mode file -f document.txt -q "Summarize this" --temperature 0.5
   
   # Full configuration example
-  python hawa_lms.py --mode sync_stream -q "Explain AI" --temperature 0.7 --max-tokens 500 --top-p 0.95 --repeat-penalty 1.1 --context-length 8192 --gpu-offload 0.5
+  python hawa_lms.py --mode sync_stream -q "Explain AI" --system-prompt "You are a coding expert." --temperature 0.7 --max-tokens 500 --top-p 0.95 --repeat-penalty 1.1 --context-length 8192 --gpu-offload 0.5
         """
     )
     
@@ -509,6 +578,14 @@ Examples:
         "-p", "--prompt",
         type=str,
         help="Prompt for completion mode"
+    )
+    
+    # System prompt
+    parser.add_argument(
+        "-s", "--system-prompt",
+        type=str,
+        default=None,
+        help="System prompt to set the model's behavior, tone, or rules (e.g., 'You are a helpful assistant.')"
     )
     
     # History
@@ -614,6 +691,7 @@ def run():
     # Build configurations
     predict_config = build_prediction_config(args)
     load_config = build_load_config(args)
+    system_prompt = args.system_prompt
     
     chat = LMChat(model_key=args.model, load_config=load_config)
     
@@ -625,17 +703,32 @@ def run():
         # Handle streaming modes
         if args.mode == "async_stream":
             print("\nRunning in ASYNC STREAM mode")
-            asyncio.run(chat.async_stream_chat(args.question, show_reasoning=not args.no_reasoning, predict_config=predict_config))
+            asyncio.run(chat.async_stream_chat(
+                args.question, 
+                show_reasoning=not args.no_reasoning,
+                system_prompt=system_prompt,
+                predict_config=predict_config
+            ))
             return
             
         elif args.mode == "sync_stream":
             print("\nRunning in SYNC STREAM mode")
-            chat.sync_stream_chat(args.question, show_reasoning=not args.no_reasoning, predict_config=predict_config)
+            chat.sync_stream_chat(
+                args.question, 
+                show_reasoning=not args.no_reasoning,
+                system_prompt=system_prompt,
+                predict_config=predict_config
+            )
             return
             
         elif args.mode == "last_stream":
             print("\nRunning in CONVENIENCE STREAM mode")
-            chat.convenience_stream_chat(args.question, show_reasoning=not args.no_reasoning, predict_config=predict_config)
+            chat.convenience_stream_chat(
+                args.question, 
+                show_reasoning=not args.no_reasoning,
+                system_prompt=system_prompt,
+                predict_config=predict_config
+            )
             return
             
         elif args.mode == "complete_stream":
@@ -650,7 +743,13 @@ def run():
                 raise ValueError("Please provide a text file path using -f/--file")
             if not args.question:
                 raise ValueError("Please provide a question using -q/--question")
-            chat.stream_chat_with_file(args.file, args.question, show_reasoning=not args.no_reasoning, predict_config=predict_config)
+            chat.stream_chat_with_file(
+                args.file, 
+                args.question, 
+                show_reasoning=not args.no_reasoning,
+                system_prompt=system_prompt,
+                predict_config=predict_config
+            )
             return
         
         # Handle non-streaming modes
@@ -667,7 +766,12 @@ def run():
                 raise ValueError("Please provide a text file path using -f/--file")
             if not args.question:
                 raise ValueError("Please provide a question using -q/--question")
-            result = chat.chat_with_file(args.file, args.question, predict_config=predict_config)
+            result = chat.chat_with_file(
+                args.file, 
+                args.question, 
+                system_prompt=system_prompt,
+                predict_config=predict_config
+            )
             print("\n" + "="*50)
             print("Response:")
             print("="*50)
@@ -693,11 +797,15 @@ def run():
                     ("My hovercraft is full of eels!", "I will not buy this record, it is scratched."),
                     ("Do you have any cheese?", "This shop only sells eels and records.")
                 ]
-            result = chat.chat_with_history(messages)
+            result = chat.chat_with_history(messages, system_prompt=system_prompt)
             
         elif args.mode == "async":
             print("\nRunning in ASYNC mode")
-            result = asyncio.run(chat.async_chat(args.question, predict_config=predict_config))
+            result = asyncio.run(chat.async_chat(
+                args.question,
+                system_prompt=system_prompt,
+                predict_config=predict_config
+            ))
             print("\n" + "="*50)
             print("Response:")
             print("="*50)
@@ -706,7 +814,11 @@ def run():
             
         elif args.mode == "sync":
             print("\nRunning in SYNC mode")
-            result = chat.sync_chat(args.question, predict_config=predict_config)
+            result = chat.sync_chat(
+                args.question,
+                system_prompt=system_prompt,
+                predict_config=predict_config
+            )
             print("\n" + "="*50)
             print("Response:")
             print("="*50)
@@ -715,7 +827,11 @@ def run():
             
         elif args.mode == "last":
             print("\nRunning in CONVENIENCE mode")
-            result = chat.convenience_chat(args.question, predict_config=predict_config)
+            result = chat.convenience_chat(
+                args.question,
+                system_prompt=system_prompt,
+                predict_config=predict_config
+            )
             print("\n" + "="*50)
             print("Response:")
             print("="*50)
