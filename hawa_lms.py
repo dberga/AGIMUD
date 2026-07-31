@@ -7,8 +7,9 @@ from pathlib import Path
 
 # Full tutorial
 # 1. Download and install LM Studio from https://lmstudio.ai/download
-# 2. Run LM studio and download a specific model, or either run in terminal $lms get qwen/qwen3-4b-2507
-# 3. Check this tutorial for further knowledge on the LMS python SDK https://lmstudio.ai/docs/python and run the following code:
+# 2. Run LM Studio GUI and Download a specific model, or either run in terminal $lms get qwen/qwen3-4b-2507
+# 3. Install LM Studio Python SDK with $pip install lmstudio
+# 4. Check this tutorial for further knowledge on the LMS python SDK https://lmstudio.ai/docs/python and run this script
 
 ## Usage
 # Completion mode (Text to complete)
