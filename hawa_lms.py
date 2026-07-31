@@ -4,29 +4,20 @@
 # 3. Install LM Studio Python SDK with $pip install lmstudio
 # 4. Check this tutorial for further knowledge on the LMS python SDK https://lmstudio.ai/docs/python and run this script
 
-import lmstudio as lms
-import sys
-import asyncio
-import argparse
-from typing import Optional, List, Tuple
-from pathlib import Path
-
-# Overall Usage (streaming responses on the go)
+## Overall Usage (streaming responses on the go)
 # python hawa_lms.py --mode sync_stream -q "What is AI?"
 # Hide reasoning for models with reasoning (only wait and show final answer)
 # python hawa_lms.py --mode sync_stream -q "What is AI?" --no-reasoning
 
-## Default Usage
-# Completion mode (Text to complete)
+## Completion mode (Text to complete)
 #python hawa_lms.py --mode complete -p "Once upon a time,"
 
-# Default conversation (History)
+## Default conversation (History)
 #python hawa_lms.py --mode history
 # Custom conversation history
 #python hawa_lms.py --mode history --history "Hello" "Welcome!" "Do you sell apples?" "No, only eels"
 
-# Prompt mode (Question-Response)
-
+## Prompt mode (Question-Response)
 # Async (default)
 #python hawa_lms.py -q "What is AI?"
 # Sync
@@ -36,14 +27,13 @@ from pathlib import Path
 # Specific model
 #python hawa_lms.py -m qwen/qwen3-4b-2507 -q "Hello"
 
-# Files Usage
-
+## Files Usage
 # Ask a question about a text file
 #python hawa_lms.py --mode file -f document.txt -q "Summarize this document"
 # Use a text file as context for a question
 #python hawa_lms.py --mode file -f notes.txt -q "What are the main points?"
 
-# Images Usage
+## Images Usage
 # Prepare an image for use with multimodal models
 #python hawa_lms.py --mode prepare_image -i /path/to/your/image.jpg
 # Prepare image with specific model
@@ -51,13 +41,43 @@ from pathlib import Path
 # List all models first to see what's available
 #python hawa_lms.py --list
 
+## Inference Parametization
+# Control creativity with temperature
+#python hawa_lms.py --mode sync -q "Write a poem" --temperature 0.9
+# Limit response length
+#python hawa_lms.py --mode sync_stream -q "Explain quantum physics" --max-tokens 200
+# Use top-p sampling
+#python hawa_lms.py --mode sync -q "Tell a joke" --top-p 0.9
+# Combine multiple parameters
+#python hawa_lms.py --mode sync_stream -q "Write a story" --temperature 0.8 --max-tokens 500 --top-p 0.95
+# Reproducible results with seed
+#python hawa_lms.py --mode sync -q "Hello" --seed 42
+# Stop sequences
+#python hawa_lms.py --mode complete -p "The recipe is" --stop "The" "and"
+
+## Load parameters
+# Set context length
+#python hawa_lms.py --mode sync -q "Long document" --context-length 8192
+# GPU offload ratio
+#python hawa_lms.py --mode sync_stream -q "Explain AI" --gpu-offload 0.5
+# Cache type
+#python hawa_lms.py --mode sync -q "Hello" --cache-type f16
+# Combine load parameters
+#python hawa_lms.py --mode sync -m deepseek/deepseek-r1-0528-qwen3-8b --context-length 4096 --gpu-offload 0.8 --cache-type q4_0
+
+import lmstudio as lms
+import sys
+import asyncio
+import argparse
+from typing import Optional, List, Tuple
+from pathlib import Path
 
 class LMChat:
     """LM Studio chat handler"""
     
-    def __init__(self, model_key: Optional[str] = None):
+    def __init__(self, model_key: Optional[str] = None, load_config: Optional[dict] = None):
         self.model_key = model_key
-        self.show_reasoning = True
+        self.load_config = load_config
     
     def list_models(self) -> None:
         """List all downloaded models"""
@@ -75,9 +95,14 @@ class LMChat:
         return llm_models[-1].model_key
     
     def get_model(self):
-        """Get model instance"""
+        """Get model instance with load configuration"""
         model_key = self.model_key or self.get_last_model()
         print(f"Loading model: {model_key}")
+        
+        # Load with configuration if provided
+        if self.load_config:
+            print(f"Load config: {self.load_config}")
+            return lms.llm(model_key, config=self.load_config)
         return lms.llm(model_key)
     
     def read_text_file(self, file_path: str) -> str:
@@ -91,50 +116,59 @@ class LMChat:
         print(f"Loaded text file: {file_path} ({len(content)} characters)")
         return content
     
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, predict_config: Optional[dict] = None) -> str:
         """Simple completion (non-streaming)"""
         model = self.get_model()
         print(f"Prompt: {prompt}")
         print("Thinking...")
-        result = model.complete(prompt)
+        if predict_config:
+            print(f"Prediction config: {predict_config}")
+        result = model.complete(prompt, config=predict_config)
         return result
     
-    def stream_complete(self, prompt: str) -> None:
+    def stream_complete(self, prompt: str, predict_config: Optional[dict] = None) -> None:
         """Stream a completion in real-time"""
         model = self.get_model()
         print(f"Prompt: {prompt}")
         print("Response: ", end="", flush=True)
         
-        for fragment in model.complete_stream(prompt):
+        for fragment in model.complete_stream(prompt, config=predict_config):
             print(fragment, end="", flush=True)
         
         print("\n")  # New line after completion
     
-    def sync_chat(self, question: str) -> str:
+    def sync_chat(self, question: str, predict_config: Optional[dict] = None) -> str:
         """Synchronous chat with the model (non-streaming)"""
         with lms.Client() as client:
             model_key = self.model_key or self.get_last_model()
             print(f"Loading model: {model_key}")
-            model = client.llm.model(model_key)
+            if self.load_config:
+                print(f"Load config: {self.load_config}")
+            model = client.llm.model(model_key, config=self.load_config)
             print(f"Question: {question}")
             print("Thinking...")
-            result = model.respond(question)
+            if predict_config:
+                print(f"Prediction config: {predict_config}")
+            result = model.respond(question, config=predict_config)
             return result
     
-    def sync_stream_chat(self, question: str, show_reasoning: bool = True) -> None:
+    def sync_stream_chat(self, question: str, show_reasoning: bool = True, predict_config: Optional[dict] = None) -> None:
         """Synchronous chat with streaming response - handles DeepSeek reasoning properly"""
         with lms.Client() as client:
             model_key = self.model_key or self.get_last_model()
             print(f"Loading model: {model_key}")
-            model = client.llm.model(model_key)
+            if self.load_config:
+                print(f"Load config: {self.load_config}")
+            model = client.llm.model(model_key, config=self.load_config)
             print(f"Question: {question}")
+            if predict_config:
+                print(f"Prediction config: {predict_config}")
             
             # Track state for handling reasoning
             in_reasoning = False
-            reasoning_buffer = []
             is_first_content = True
             
-            for fragment in model.respond_stream(question):
+            for fragment in model.respond_stream(question, config=predict_config):
                 # If fragment is a string or has content attribute
                 if isinstance(fragment, str):
                     content = fragment
@@ -152,34 +186,22 @@ class LMChat:
                 # Handle reasoning content
                 if is_reasoning_fragment or (isinstance(content, str) and '<think>' in content):
                     if not show_reasoning:
-                        # If we don't want to show reasoning, collect it but don't print
+                        # Skip reasoning entirely
                         if '<think>' in content:
-                            # Start collecting reasoning
                             in_reasoning = True
-                            reasoning_buffer = []
                         elif '</think>' in content:
-                            # End of reasoning
                             in_reasoning = False
-                            reasoning_buffer.append(content)
-                            if not show_reasoning:
-                                # Reset buffer and don't print
-                                reasoning_buffer = []
-                        elif in_reasoning:
-                            reasoning_buffer.append(content)
                         continue
                     
                     # Show reasoning
                     if not in_reasoning and '<think>' in content:
                         print("\n[Reasoning]: ", end="", flush=True)
                         in_reasoning = True
-                        reasoning_buffer = []
-                        # Remove <think> tag from display
                         content = content.replace('<think>', '')
                     
                     if '</think>' in content:
                         in_reasoning = False
                         content = content.replace('</think>', '')
-                        # Print the rest of the reasoning content
                         if content:
                             print(content, end="", flush=True)
                         print("\n\n[Answer]: ", end="", flush=True)
@@ -191,7 +213,6 @@ class LMChat:
                 
                 # This is final answer content
                 if is_first_content and not show_reasoning:
-                    # If we skipped reasoning, start with answer label
                     print("[Answer]: ", end="", flush=True)
                     is_first_content = False
                 
@@ -199,31 +220,38 @@ class LMChat:
             
             print("\n")  # New line after response
     
-    async def async_chat(self, question: str) -> str:
+    async def async_chat(self, question: str, predict_config: Optional[dict] = None) -> str:
         """Asynchronous chat with the model (non-streaming)"""
         async with lms.AsyncClient() as client:
             model_key = self.model_key or self.get_last_model()
             print(f"Loading model: {model_key}")
-            model = await client.llm.model(model_key)
+            if self.load_config:
+                print(f"Load config: {self.load_config}")
+            model = await client.llm.model(model_key, config=self.load_config)
             print(f"Question: {question}")
             print("Thinking...")
-            result = await model.respond(question)
+            if predict_config:
+                print(f"Prediction config: {predict_config}")
+            result = await model.respond(question, config=predict_config)
             return result
     
-    async def async_stream_chat(self, question: str, show_reasoning: bool = True) -> None:
+    async def async_stream_chat(self, question: str, show_reasoning: bool = True, predict_config: Optional[dict] = None) -> None:
         """Asynchronous chat with streaming response - handles DeepSeek reasoning properly"""
         async with lms.AsyncClient() as client:
             model_key = self.model_key or self.get_last_model()
             print(f"Loading model: {model_key}")
-            model = await client.llm.model(model_key)
+            if self.load_config:
+                print(f"Load config: {self.load_config}")
+            model = await client.llm.model(model_key, config=self.load_config)
             print(f"Question: {question}")
+            if predict_config:
+                print(f"Prediction config: {predict_config}")
             
             # Track state for handling reasoning
             in_reasoning = False
-            reasoning_buffer = []
             is_first_content = True
             
-            async for fragment in model.respond_stream(question):
+            async for fragment in model.respond_stream(question, config=predict_config):
                 # If fragment is a string or has content attribute
                 if isinstance(fragment, str):
                     content = fragment
@@ -241,34 +269,22 @@ class LMChat:
                 # Handle reasoning content
                 if is_reasoning_fragment or (isinstance(content, str) and '<think>' in content):
                     if not show_reasoning:
-                        # If we don't want to show reasoning, collect it but don't print
+                        # Skip reasoning entirely
                         if '<think>' in content:
-                            # Start collecting reasoning
                             in_reasoning = True
-                            reasoning_buffer = []
                         elif '</think>' in content:
-                            # End of reasoning
                             in_reasoning = False
-                            reasoning_buffer.append(content)
-                            if not show_reasoning:
-                                # Reset buffer and don't print
-                                reasoning_buffer = []
-                        elif in_reasoning:
-                            reasoning_buffer.append(content)
                         continue
                     
                     # Show reasoning
                     if not in_reasoning and '<think>' in content:
                         print("\n[Reasoning]: ", end="", flush=True)
                         in_reasoning = True
-                        reasoning_buffer = []
-                        # Remove <think> tag from display
                         content = content.replace('<think>', '')
                     
                     if '</think>' in content:
                         in_reasoning = False
                         content = content.replace('</think>', '')
-                        # Print the rest of the reasoning content
                         if content:
                             print(content, end="", flush=True)
                         print("\n\n[Answer]: ", end="", flush=True)
@@ -280,7 +296,6 @@ class LMChat:
                 
                 # This is final answer content
                 if is_first_content and not show_reasoning:
-                    # If we skipped reasoning, start with answer label
                     print("[Answer]: ", end="", flush=True)
                     is_first_content = False
                 
@@ -288,24 +303,28 @@ class LMChat:
             
             print("\n")  # New line after response
     
-    def convenience_chat(self, question: str) -> str:
+    def convenience_chat(self, question: str, predict_config: Optional[dict] = None) -> str:
         """Convenience method using lms.llm() (non-streaming)"""
         model = self.get_model()
         print(f"Question: {question}")
         print("Thinking...")
-        result = model.respond(question)
+        if predict_config:
+            print(f"Prediction config: {predict_config}")
+        result = model.respond(question, config=predict_config)
         return result
     
-    def convenience_stream_chat(self, question: str, show_reasoning: bool = True) -> None:
+    def convenience_stream_chat(self, question: str, show_reasoning: bool = True, predict_config: Optional[dict] = None) -> None:
         """Convenience method with streaming - handles DeepSeek reasoning properly"""
         model = self.get_model()
         print(f"Question: {question}")
+        if predict_config:
+            print(f"Prediction config: {predict_config}")
         
         # Track state for handling reasoning
         in_reasoning = False
         is_first_content = True
         
-        for fragment in model.respond_stream(question):
+        for fragment in model.respond_stream(question, config=predict_config):
             # If fragment is a string or has content attribute
             if isinstance(fragment, str):
                 content = fragment
@@ -382,30 +401,86 @@ class LMChat:
             print(f"Image prepared successfully. File handle: {file_handle}")
             return str(file_handle)
     
-    def chat_with_file(self, file_path: str, question: str) -> str:
+    def chat_with_file(self, file_path: str, question: str, predict_config: Optional[dict] = None) -> str:
         """Chat about a text file's contents"""
         content = self.read_text_file(file_path)
         prompt = f"Here is the content of a file:\n\n{content}\n\nQuestion: {question}"
-        return self.convenience_chat(prompt)
+        return self.convenience_chat(prompt, predict_config)
     
-    def stream_chat_with_file(self, file_path: str, question: str, show_reasoning: bool = True) -> None:
+    def stream_chat_with_file(self, file_path: str, question: str, show_reasoning: bool = True, predict_config: Optional[dict] = None) -> None:
         """Chat about a text file's contents with streaming"""
         content = self.read_text_file(file_path)
         prompt = f"Here is the content of a file:\n\n{content}\n\nQuestion: {question}"
-        self.convenience_stream_chat(prompt, show_reasoning)
+        self.convenience_stream_chat(prompt, show_reasoning, predict_config)
+
+def build_prediction_config(args):
+    """Build inference configuration from command line arguments"""
+    config = {}
+    if args.temperature is not None:
+        config["temperature"] = args.temperature
+    if args.max_tokens is not None:
+        config["maxTokens"] = args.max_tokens
+    if args.top_p is not None:
+        config["topP"] = args.top_p
+    if args.top_k is not None:
+        config["topK"] = args.top_k
+    if args.repeat_penalty is not None:
+        config["repeatPenalty"] = args.repeat_penalty
+    if args.seed is not None:
+        config["seed"] = args.seed
+    if args.stop is not None:
+        config["stop"] = args.stop
+    return config if config else None
+
+def build_load_config(args):
+    """Build load configuration from command line arguments"""
+    config = {}
+    if args.context_length is not None:
+        config["contextLength"] = args.context_length
+    if args.gpu_offload is not None:
+        config["gpuOffloadRatio"] = args.gpu_offload
+    if args.cache_type is not None:
+        config["cacheType"] = args.cache_type
+    return config if config else None
 
 def parse_args():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(
-        description="Chat with LM Studio models"
+        description="Chat with LM Studio models",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Basic chat with default settings
+  python hawa_lms.py --mode sync -q "What is AI?"
+  
+  # Chat with temperature and token limit
+  python hawa_lms.py --mode sync_stream -q "Tell a story" --temperature 0.8 --max-tokens 300
+  
+  # Stream with reasoning hidden
+  python hawa_lms.py --mode sync_stream -q "Explain quantum physics" --no-reasoning
+  
+  # Use specific model with load config
+  python hawa_lms.py --mode sync -m deepseek/deepseek-r1-0528-qwen3-8b --context-length 4096 --gpu-offload 0.8
+  
+  # Complete with top-p and seed
+  python hawa_lms.py --mode complete -p "Once upon a time" --top-p 0.9 --seed 42
+  
+  # Chat with file
+  python hawa_lms.py --mode file -f document.txt -q "Summarize this" --temperature 0.5
+  
+  # Full configuration example
+  python hawa_lms.py --mode sync_stream -q "Explain AI" --temperature 0.7 --max-tokens 500 --top-p 0.95 --repeat-penalty 1.1 --context-length 8192 --gpu-offload 0.5
+        """
     )
     
+    # Model selection
     parser.add_argument(
         "-m", "--model",
         type=str,
-        help="Model key to use (e.g., 'qwen/qwen3-4b-2507')"
+        help="Model key to use (e.g., 'qwen/qwen3-4b-2507', 'deepseek/deepseek-r1-0528-qwen3-8b')"
     )
     
+    # Question/Prompt
     parser.add_argument(
         "-q", "--question",
         type=str,
@@ -413,49 +488,121 @@ def parse_args():
         help="Question to ask the model"
     )
     
+    # Mode
     parser.add_argument(
         "--mode",
         choices=["async", "sync", "last", "complete", "history", "prepare_image", "file",
                  "async_stream", "sync_stream", "last_stream", "complete_stream", "file_stream"],
-        default="async",
-        help="Mode of operation: async, sync, last, complete, history, prepare_image, file, "
-             "async_stream, sync_stream, last_stream, complete_stream, file_stream"
+        default="sync",
+        help="Mode of operation"
     )
     
+    # List models
     parser.add_argument(
         "-l", "--list",
         action="store_true",
         help="List all downloaded models and exit"
     )
     
+    # Prompt for completion
     parser.add_argument(
         "-p", "--prompt",
         type=str,
         help="Prompt for completion mode"
     )
     
+    # History
     parser.add_argument(
         "--history",
         nargs="*",
-        help="Chat history as alternating user/assistant messages (e.g., 'Hello' 'Hi' 'How are you?' 'I am fine')"
+        help="Chat history as alternating user/assistant messages"
     )
     
+    # Image
     parser.add_argument(
         "-i", "--image",
         type=str,
         help="Path to image file for prepare_image mode"
     )
     
+    # File
     parser.add_argument(
         "-f", "--file",
         type=str,
         help="Path to text file for file mode"
     )
     
+    # Reasoning
     parser.add_argument(
         "--no-reasoning",
         action="store_true",
         help="Disable displaying reasoning/thinking process (only show final answer)"
+    )
+    
+    # Inference parameters
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="Temperature for prediction (0.0 to 2.0). Higher = more random."
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=None,
+        help="Maximum number of tokens to generate."
+    )
+    parser.add_argument(
+        "--top-p",
+        type=float,
+        default=None,
+        help="Top-p sampling parameter (0.0 to 1.0)."
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=None,
+        help="Top-k sampling parameter."
+    )
+    parser.add_argument(
+        "--repeat-penalty",
+        type=float,
+        default=None,
+        help="Repeat penalty (1.0 = no penalty, >1.0 discourages repetition)."
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducible results."
+    )
+    parser.add_argument(
+        "--stop",
+        type=str,
+        nargs='+',
+        default=None,
+        help="Stop sequences (strings) to halt generation."
+    )
+    
+    # Load parameters
+    parser.add_argument(
+        "--context-length",
+        type=int,
+        default=None,
+        help="Context length for the model (e.g., 4096, 8192)."
+    )
+    parser.add_argument(
+        "--gpu-offload",
+        type=float,
+        default=None,
+        help="GPU offload ratio (0.0 to 1.0)."
+    )
+    parser.add_argument(
+        "--cache-type",
+        type=str,
+        choices=["auto", "f16", "q4_0", "q4_1", "q5_0", "q5_1", "q8_0"],
+        default=None,
+        help="Cache type for the model."
     )
     
     return parser.parse_args()
@@ -464,7 +611,11 @@ def run():
     """Main entry point"""
     args = parse_args()
     
-    chat = LMChat(model_key=args.model)
+    # Build configurations
+    predict_config = build_prediction_config(args)
+    load_config = build_load_config(args)
+    
+    chat = LMChat(model_key=args.model, load_config=load_config)
     
     if args.list:
         chat.list_models()
@@ -474,23 +625,23 @@ def run():
         # Handle streaming modes
         if args.mode == "async_stream":
             print("\nRunning in ASYNC STREAM mode")
-            asyncio.run(chat.async_stream_chat(args.question, show_reasoning=not args.no_reasoning))
+            asyncio.run(chat.async_stream_chat(args.question, show_reasoning=not args.no_reasoning, predict_config=predict_config))
             return
             
         elif args.mode == "sync_stream":
             print("\nRunning in SYNC STREAM mode")
-            chat.sync_stream_chat(args.question, show_reasoning=not args.no_reasoning)
+            chat.sync_stream_chat(args.question, show_reasoning=not args.no_reasoning, predict_config=predict_config)
             return
             
         elif args.mode == "last_stream":
             print("\nRunning in CONVENIENCE STREAM mode")
-            chat.convenience_stream_chat(args.question, show_reasoning=not args.no_reasoning)
+            chat.convenience_stream_chat(args.question, show_reasoning=not args.no_reasoning, predict_config=predict_config)
             return
             
         elif args.mode == "complete_stream":
             print("\nRunning in COMPLETION STREAM mode")
             prompt = args.prompt or "Once upon a time,"
-            chat.stream_complete(prompt)
+            chat.stream_complete(prompt, predict_config=predict_config)
             return
             
         elif args.mode == "file_stream":
@@ -499,7 +650,7 @@ def run():
                 raise ValueError("Please provide a text file path using -f/--file")
             if not args.question:
                 raise ValueError("Please provide a question using -q/--question")
-            chat.stream_chat_with_file(args.file, args.question, show_reasoning=not args.no_reasoning)
+            chat.stream_chat_with_file(args.file, args.question, show_reasoning=not args.no_reasoning, predict_config=predict_config)
             return
         
         # Handle non-streaming modes
@@ -516,7 +667,7 @@ def run():
                 raise ValueError("Please provide a text file path using -f/--file")
             if not args.question:
                 raise ValueError("Please provide a question using -q/--question")
-            result = chat.chat_with_file(args.file, args.question)
+            result = chat.chat_with_file(args.file, args.question, predict_config=predict_config)
             print("\n" + "="*50)
             print("Response:")
             print("="*50)
@@ -526,7 +677,7 @@ def run():
         elif args.mode == "complete":
             print("\nRunning in COMPLETION mode")
             prompt = args.prompt or "Once upon a time,"
-            result = chat.complete(prompt)
+            result = chat.complete(prompt, predict_config=predict_config)
             print("\n" + "="*50)
             print("Response:")
             print("="*50)
@@ -546,7 +697,7 @@ def run():
             
         elif args.mode == "async":
             print("\nRunning in ASYNC mode")
-            result = asyncio.run(chat.async_chat(args.question))
+            result = asyncio.run(chat.async_chat(args.question, predict_config=predict_config))
             print("\n" + "="*50)
             print("Response:")
             print("="*50)
@@ -555,7 +706,7 @@ def run():
             
         elif args.mode == "sync":
             print("\nRunning in SYNC mode")
-            result = chat.sync_chat(args.question)
+            result = chat.sync_chat(args.question, predict_config=predict_config)
             print("\n" + "="*50)
             print("Response:")
             print("="*50)
@@ -564,7 +715,7 @@ def run():
             
         elif args.mode == "last":
             print("\nRunning in CONVENIENCE mode")
-            result = chat.convenience_chat(args.question)
+            result = chat.convenience_chat(args.question, predict_config=predict_config)
             print("\n" + "="*50)
             print("Response:")
             print("="*50)
