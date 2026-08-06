@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "web-search": {
+      "command": "node",
+      "args": [
+        "{{LMSTUDIO_PATH}}/web-search-mcp-v0.3.2/dist/index.js"
+      ]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest"
+      ]
+    }
+  }
+}
