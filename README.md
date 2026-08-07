@@ -4,7 +4,7 @@
 
 For editing your world characters, objects and scene names, modify `objects_names.txt`, `characters_names.txt` and `scenes_names.txt` if needed.
 
-Then edit `world_vocabulary.json`, `generation_config.json`, `action_catalog.json`,  `world_dynamics.json` to change the world and assets mechanics.
+Then edit `world_vocabulary.json`, `generation_config.json`, `world_dynamics.json` to change the world and assets mechanics.
 
 ## Generate and Simulate Worlds
 
