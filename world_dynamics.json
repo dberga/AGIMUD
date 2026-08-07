@@ -1,0 +1,407 @@
+{
+  "version": "2.0",
+  "description": "Complete world dynamics configuration - all behavior and display defined here",
+  
+  "display": {
+    "title": "SIMULATED WORLD",
+    "header_separator": "=",
+    "header_width": 80,
+    "date_format": "%Y-%m-%d %H:%M:%S",
+    
+    "world_state_display": {
+      "label": "WORLD STATE",
+      "fields": [
+        {"key": "global_states.weather", "label": "Weather", "default": "Unknown", "format": "{label}: {value}"},
+        {"key": "global_states.time_of_day", "label": "Time", "default": "Unknown", "format": "{label}: {value}"},
+        {"key": "current_state", "label": "Mood", "default": "Unknown", "format": "{label}: {value}"},
+        {"key": "global_timers.day_cycle", "label": "Day Cycle", "default": "00:00", "format": "{label}: {value}", "transform": "day_cycle"}
+      ]
+    },
+    
+    "user_state_display": {
+      "label": "USER STATE",
+      "fields": [
+        {"key": "current_scene", "label": "Current Scene", "default": "Unknown", "format": "{label}: {value}"},
+        {"key": "player_state.health", "label": "Health", "default": "100", "format": "{label}: {value}"},
+        {"key": "player_state.stamina", "label": "Stamina", "default": "100", "format": "{label}: {value}"},
+        {"key": "player_state.gold", "label": "Gold", "default": "0", "format": "{label}: {value}"}
+      ]
+    },
+    
+    "character_display": {
+      "label": "CHARACTERS",
+      "count_format": "({count})",
+      "item_format": "{name} [{ai_state}] HP:{health} ST:{stamina} @ {location}",
+      "fields": [
+        {"key": "name", "label": "Name", "default": "Unknown"},
+        {"key": "ai_state", "label": "AI State", "default": "IDLE"},
+        {"key": "status_variables.health", "label": "Health", "default": "?"},
+        {"key": "status_variables.stamina", "label": "Stamina", "default": "?"},
+        {"key": "navigation.current_location", "label": "Location", "default": "Unknown"}
+      ]
+    },
+    "object_display": {
+      "label": "OBJECTS",
+      "count_format": "({count})",
+      "item_format": "{name} ({type}) [{quality}] Durability:{durability}",
+      "fields": [
+        {"key": "name", "label": "Name", "default": "Unknown"},
+        {"key": "properties.type", "label": "Type", "default": "item"},
+        {"key": "object_variables.durability", "label": "Durability", "default": "?"},
+        {"key": "object_variables.quality", "label": "Quality", "default": "standard"}
+      ]
+    },
+    "events_display": {
+      "label": "RECENT EVENTS",
+      "count_format": "(last {count})",
+      "max_display": 10,
+      "item_format": "[{tick:4d}] {timestamp} - {text}",
+      "timestamp_format": "%H:%M:%S"
+    },
+    "controls_display": {
+      "label": "CONTROLS",
+      "items": [
+        {"key": "Ctrl+C", "description": "Save and quit"}
+      ],
+      "format": "[{key}] {description}",
+      "separator": " | "
+    }
+  },
+
+  "world_state_management": {
+    "time_of_day": {
+      "enabled": true,
+      "cycle_duration": 1440,
+      "states": ["dawn", "morning", "afternoon", "dusk", "night", "midnight", "twilight"],
+      "transitions": [
+        {"from": "dawn", "to": "morning", "after_ticks": 120},
+        {"from": "morning", "to": "afternoon", "after_ticks": 180},
+        {"from": "afternoon", "to": "dusk", "after_ticks": 240},
+        {"from": "dusk", "to": "night", "after_ticks": 120},
+        {"from": "night", "to": "midnight", "after_ticks": 240},
+        {"from": "midnight", "to": "twilight", "after_ticks": 180},
+        {"from": "twilight", "to": "dawn", "after_ticks": 120}
+      ],
+      "message_template": "[TIME] The time of day changes to {new_state}"
+    }
+  },
+
+  "global_events": {
+    "enabled": true,
+    "check_interval": 1,
+    "event_types": [
+      {
+        "id": "weather_change",
+        "name": "Weather Change",
+        "probability": 0.05,
+        "triggers": [
+          {"type": "random", "condition": "tick_count % 10 == 0"}
+        ],
+        "state_changes": [
+          {"type": "set_state", "target": "global_states.weather", "source": "weather", "random": true}
+        ],
+        "placeholders": {
+          "weather": {"source": "weather", "random": true}
+        },
+        "message_template": "[WEATHER] The weather changes to {weather}"
+      },
+      {
+        "id": "character_action",
+        "name": "Character Action",
+        "probability": 0.20,
+        "triggers": [
+          {"type": "random", "condition": "characters.count > 0"}
+        ],
+        "placeholders": {
+          "action": {"source": "list", "list": ["patrols the area", "rests under a tree", "searches for supplies", "talks to a merchant", "practices combat skills", "gathers firewood", "sharpens their weapon", "studies ancient texts"]},
+          "character_name": {"source": "character", "random": true},
+          "location": {"source": "location", "random": true}
+        },
+        "state_changes": [],
+        "message_template": "[ACTION] {character_name} {action} at {location}"
+      },
+      {
+        "id": "discovery",
+        "name": "Discovery",
+        "probability": 0.08,
+        "triggers": [
+          {"type": "random", "condition": "tick_count % 15 == 0"}
+        ],
+        "placeholders": {
+          "item": {"source": "list", "list": ["treasure", "ancient artifact", "hidden passage", "magic scroll", "rare mineral", "abandoned camp", "mysterious ruins", "secret map"]},
+          "location": {"source": "location", "random": true}
+        },
+        "state_changes": [],
+        "message_template": "[DISCOVERY] A hidden {item} is found at {location}!"
+      },
+      {
+        "id": "conflict",
+        "name": "Conflict",
+        "probability": 0.06,
+        "triggers": [
+          {"type": "random", "condition": "characters.count >= 2"}
+        ],
+        "placeholders": {
+          "character1_name": {"source": "character", "index": 0},
+          "character2_name": {"source": "character", "index": 1}
+        },
+        "state_changes": [
+          {"type": "modify_character", "target": "morale", "operation": "add", "value": -10}
+        ],
+        "message_template": "[CONFLICT] {character1_name} and {character2_name} argue over resources!"
+      },
+      {
+        "id": "resource_change",
+        "name": "Resource Change",
+        "probability": 0.10,
+        "triggers": [
+          {"type": "random", "condition": "tick_count % 5 == 0"}
+        ],
+        "placeholders": {
+          "resource": {"source": "list", "list": ["gold", "food", "wood", "water", "iron", "gems", "herbs"]},
+          "action": {"source": "list", "list": ["gains", "loses"]},
+          "amount": {"source": "random_int", "min": 1, "max": 20}
+        },
+        "state_changes": [],
+        "message_template": "[RESOURCE] The world {action} {amount} {resource}"
+      },
+      {
+        "id": "npc_interaction",
+        "name": "NPC Interaction",
+        "probability": 0.12,
+        "triggers": [
+          {"type": "random", "condition": "characters.count >= 2"}
+        ],
+        "placeholders": {
+          "interaction": {"source": "list", "list": ["trades goods", "shares stories", "argues", "makes a pact", "sings together", "fights a duel", "plays chess", "shares a meal"]},
+          "character1_name": {"source": "character", "index": 0},
+          "character2_name": {"source": "character", "index": 1},
+          "location": {"source": "location", "random": true}
+        },
+        "state_changes": [
+          {"type": "modify_character", "target": "morale", "operation": "add", "value": 5}
+        ],
+        "message_template": "[INTERACTION] {character1_name} {interaction} with {character2_name} at {location}"
+      },
+      {
+        "id": "monster_attack",
+        "name": "Monster Attack",
+        "probability": 0.04,
+        "triggers": [
+          {"type": "random", "condition": "tick_count % 20 == 0"}
+        ],
+        "placeholders": {
+          "monster": {"source": "list", "list": ["Goblin", "Orc", "Troll", "Dragon", "Ogre", "Skeleton", "Wolf"]},
+          "location": {"source": "location", "random": true}
+        },
+        "state_changes": [
+          {"type": "modify_character", "target": "health", "operation": "add", "value": -15}
+        ],
+        "message_template": "[ATTACK] A {monster} attacks the {location}! Stay alert!"
+      },
+      {
+        "id": "festival",
+        "name": "Festival",
+        "probability": 0.03,
+        "triggers": [
+          {"type": "random", "condition": "tick_count % 50 == 0"}
+        ],
+        "placeholders": {
+          "festival": {"source": "list", "list": ["Harvest", "Solstice", "Founding Day", "Moon Festival"]},
+          "location": {"source": "location", "random": true}
+        },
+        "state_changes": [
+          {"type": "modify_character", "target": "morale", "operation": "add", "value": 15}
+        ],
+        "message_template": "[FESTIVAL] The {festival} celebration begins in the {location}!"
+      },
+      {
+        "id": "quest_appears",
+        "name": "Quest Appears",
+        "probability": 0.02,
+        "triggers": [
+          {"type": "random", "condition": "tick_count % 30 == 0"}
+        ],
+        "placeholders": {
+          "quest": {"source": "list", "list": ["Fetch the golden sword", "Defeat the dark sorcerer", "Find the lost princess", "Retrieve the crystal shard", "Protect the village", "Slay the dragon"]}
+        },
+        "state_changes": [
+          {"type": "set_flag", "target": "player_has_quest", "value": true}
+        ],
+        "message_template": "[QUEST] A new quest appears: {quest}"
+      }
+    ]
+  },
+
+  "status_changes": {
+    "character_status": {
+      "health": {
+        "min": 0, "max": 100, "default": 100,
+        "change_rate": {
+          "idle": {"rate": 0.0},
+          "resting": {"rate": 0.5},
+          "patrol": {"rate": -0.1},
+          "combat": {"rate": -2.0}
+        },
+        "random_events": {
+          "healing": {"probability": 0.05, "change": 10, "message": "heals slightly"},
+          "injury": {"probability": 0.02, "change": -15, "message": "is injured"}
+        }
+      },
+      "stamina": {
+        "min": 0, "max": 100, "default": 100,
+        "change_rate": {
+          "idle": {"rate": 0.0},
+          "resting": {"rate": 1.0},
+          "patrol": {"rate": -0.5},
+          "combat": {"rate": -3.0},
+          "traveling": {"rate": -1.0}
+        },
+        "random_events": {
+          "rest": {"probability": 0.08, "change": 20, "message": "restores stamina"},
+          "exhaustion": {"probability": 0.01, "change": -25, "message": "becomes exhausted"}
+        }
+      },
+      "hunger": {
+        "min": 0, "max": 100, "default": 50,
+        "change_rate": {
+          "idle": {"rate": 0.2},
+          "resting": {"rate": 0.1},
+          "patrol": {"rate": 0.5},
+          "combat": {"rate": 1.0}
+        },
+        "random_events": {
+          "eats": {"probability": 0.10, "change": -20, "message": "finds food"},
+          "starves": {"probability": 0.02, "change": 10, "message": "goes hungry"}
+        }
+      },
+      "thirst": {
+        "min": 0, "max": 100, "default": 50,
+        "change_rate": {
+          "idle": {"rate": 0.1},
+          "resting": {"rate": 0.05},
+          "patrol": {"rate": 0.3},
+          "combat": {"rate": 0.8}
+        },
+        "random_events": {
+          "drinks": {"probability": 0.08, "change": -15, "message": "finds water"},
+          "dehydrates": {"probability": 0.02, "change": 10, "message": "becomes thirsty"}
+        }
+      },
+      "morale": {
+        "min": 0, "max": 100, "default": 75,
+        "change_rate": {
+          "idle": {"rate": 0.0},
+          "resting": {"rate": 0.2},
+          "combat": {"rate": -0.5}
+        },
+        "random_events": {
+          "good_news": {"probability": 0.05, "change": 10, "message": "hears good news"},
+          "bad_news": {"probability": 0.03, "change": -10, "message": "hears bad news"}
+        }
+      }
+    },
+    "object_status": {
+      "durability": {
+        "min": 0, "max": 100, "default": 100,
+        "change_rate": {
+          "idle": {"rate": 0.0},
+          "used": {"rate": -0.5},
+          "abused": {"rate": -2.0},
+          "repaired": {"rate": 1.0}
+        },
+        "random_events": {
+          "damage": {"probability": 0.03, "change": -10, "message": "is damaged"},
+          "repair": {"probability": 0.02, "change": 15, "message": "is repaired"}
+        }
+      }
+    }
+  },
+
+  "character_movement": {
+    "enabled": true,
+    "movement_probability": 0.15,
+    "location_source": "locations",
+    "message_template": "[MOVEMENT] {character_name} moves from {old_location} to {new_location}"
+  },
+
+  "ai_state_changes": {
+    "states": ["IDLE", "PATROLLING", "GUARDING", "HUNTING", "RESTING", "TRAVELING", "COMBAT", "FLEEING", "SEARCHING", "FOLLOWING"],
+    "transitions": [
+      {
+        "from": "IDLE",
+        "to": "PATROLLING",
+        "condition": {"type": "tick_mod", "mod": 30},
+        "probability": 0.3,
+        "message": "starts patrolling"
+      },
+      {
+        "from": "IDLE",
+        "to": "RESTING",
+        "condition": {"type": "status_less_than", "target": "stamina", "threshold": 30},
+        "probability": 0.8,
+        "message": "rests to recover stamina"
+      },
+      {
+        "from": "PATROLLING",
+        "to": "COMBAT",
+        "condition": {"type": "random_chance", "threshold": 0.3},
+        "probability": 0.9,
+        "message": "engages in combat"
+      },
+      {
+        "from": "PATROLLING",
+        "to": "RESTING",
+        "condition": {"type": "status_less_than", "target": "stamina", "threshold": 20},
+        "probability": 0.7,
+        "message": "stops to rest"
+      },
+      {
+        "from": "COMBAT",
+        "to": "FLEEING",
+        "condition": {"type": "status_less_than", "target": "health", "threshold": 25},
+        "probability": 0.9,
+        "message": "flees from combat"
+      },
+      {
+        "from": "COMBAT",
+        "to": "RESTING",
+        "condition": {"type": "and", "conditions": [
+          {"type": "status_less_than", "target": "health", "threshold": 50},
+          {"type": "random_chance", "threshold": 0.5}
+        ]},
+        "probability": 0.8,
+        "message": "rests after combat"
+      },
+      {
+        "from": "RESTING",
+        "to": "IDLE",
+        "condition": {"type": "status_greater_than", "target": "stamina", "threshold": 80},
+        "probability": 0.7,
+        "message": "resumes activity"
+      },
+      {
+        "from": "HUNTING",
+        "to": "COMBAT",
+        "condition": {"type": "random_chance", "threshold": 0.1},
+        "probability": 0.95,
+        "message": "finds prey"
+      },
+      {
+        "from": "TRAVELING",
+        "to": "IDLE",
+        "condition": {"type": "random_chance", "threshold": 0.15},
+        "probability": 0.9,
+        "message": "reaches destination"
+      }
+    ]
+  },
+
+  "message_templates": {
+    "character_entry": "[ENTRY] {character_name} of the {faction} enters the world at {location}",
+    "character_move": "[MOVEMENT] {character_name} moves from {old_location} to {new_location}",
+    "character_ai_change": "[AI] {character_name} changes state: {old_state} -> {new_state}",
+    "object_entry": "[ENTRY] A {quality} {object_type} named '{object_name}' appears at {location}",
+    "scene_entry": "[SCENE] Welcome to {scene_name}! Areas: {zone_names}"
+  }
+}

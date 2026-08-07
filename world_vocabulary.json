@@ -1,0 +1,179 @@
+{
+  "locations": [
+    "Throne_Room", "Great_Hall", "Armory", "Library", "Kitchen",
+    "Courtyard", "Watchtower", "Dungeon", "Treasury", "Barracks",
+    "Chapel", "Marketplace", "Tavern", "Guild_Hall", "Smithy",
+    "Garden", "Crypt", "Tower", "Bridge", "Shrine",
+    "Forge", "Stables", "Kennels", "Greenhouse", "Observatory"
+  ],
+  "weather": [
+    "clear", "rain", "storm", "snow", "fog", "cloudy", "windy", "sunny", "thunder"
+  ],
+  "time_of_day": [
+    "dawn", "morning", "afternoon", "dusk", "night", "midnight", "twilight"
+  ],
+  "ai_states": [
+    "IDLE", "PATROLLING", "GUARDING", "HUNTING", "RESTING",
+    "TRAVELING", "COMBAT", "FLEEING", "SEARCHING", "FOLLOWING",
+    "EXPLORE", "SOCIALIZE", "GATHER", "SHARE"
+  ],
+  "ekman_emotions": [
+    "anger", "fear", "disgust", "sadness", "joy", "surprise"
+  ],
+  "emotion_intensities": {
+    "anger": ["irritated", "frustrated", "angry", "furious", "rage"],
+    "fear": ["uneasy", "apprehensive", "fearful", "terrified", "petrified"],
+    "disgust": ["disapproving", "repulsed", "disgusted", "revolted", "horrified"],
+    "sadness": ["gloomy", "sad", "grieving", "despondent", "heartbroken"],
+    "joy": ["content", "happy", "delighted", "joyous", "ecstatic"],
+    "surprise": ["puzzled", "surprised", "amazed", "astonished", "shocked"]
+  },
+  "emotion_appraisal_map": {
+    "goal_blocked": "anger",
+    "threat_detected": "fear",
+    "contamination_detected": "disgust",
+    "loss_experienced": "sadness",
+    "goal_achieved": "joy",
+    "novelty_detected": "surprise"
+  },
+  "emotion_intensity_adjustments": {
+    "health_low": 0.3,
+    "stamina_low": 0.3,
+    "health_high": -0.2,
+    "stamina_high": -0.2
+  },
+  "goal_hierarchy": {
+    "survival": {
+      "triggers": ["hunger > 70", "thirst > 70", "health < 30", "stamina < 30"],
+      "priority": 1
+    },
+    "social_belonging": {
+      "triggers": ["morale < 30", "emotional_state == joy"],
+      "priority": 2
+    },
+    "exploration": {
+      "triggers": ["emotional_state == surprise", "stamina > 70"],
+      "priority": 3
+    },
+    "power_achievement": {
+      "triggers": ["emotional_state == anger", "health > 60"],
+      "priority": 4
+    },
+    "knowledge_acquisition": {
+      "triggers": ["stamina > 70", "health > 70", "morale > 70"],
+      "priority": 5
+    },
+    "altruism": {
+      "triggers": ["benevolence > 0.7", "has_allies"],
+      "priority": 6
+    }
+  },
+  "condition_registry": {
+    "has_allies": {
+      "type": "function",
+      "description": "Character has allies",
+      "evaluation": "len(known_characters) > 0 AND any(trust > 0.6)"
+    },
+    "enemy_nearby": {
+      "type": "function",
+      "description": "Enemy detected nearby",
+      "evaluation": "any(relationship == enemy AND distance < 10)"
+    },
+    "enemy_defeated": {
+      "type": "flag",
+      "description": "Enemy has been defeated",
+      "flag_name": "enemy_defeated"
+    },
+    "safe": {
+      "type": "flag",
+      "description": "Character is in a safe zone",
+      "flag_name": "safe"
+    },
+    "door_open": {
+      "type": "state",
+      "description": "Door is open",
+      "state_key": "door_open"
+    },
+    "has_key": {
+      "type": "function",
+      "description": "Character has a key",
+      "evaluation": "any(item == key in contained_objects)"
+    },
+    "boss_defeated": {
+      "type": "flag",
+      "description": "Boss has been defeated",
+      "flag_name": "boss_defeated"
+    },
+    "threat_nearby": {
+      "type": "function",
+      "description": "Threat detected nearby",
+      "evaluation": "any(threat_level > 0.5 AND distance < 20)"
+    },
+    "ally_attacked": {
+      "type": "flag",
+      "description": "Ally has been attacked",
+      "flag_name": "ally_attacked"
+    },
+    "resources_excess": {
+      "type": "function",
+      "description": "Has excess resources",
+      "evaluation": "len(contained_objects) > 3"
+    }
+  },
+  "materials": [
+    "steel", "iron", "bronze", "gold", "silver", "wood", "stone",
+    "crystal", "dragonbone", "ebony", "ivory", "mithril", "leather",
+    "chainmail", "plate", "glass", "ceramic", "fabric", "bone",
+    "obsidian", "coral", "shell", "bone_steel", "adamantium", "valyrian"
+  ],
+  "qualities": [
+    "poor", "standard", "fine", "masterwork", "legendary", "unique"
+  ],
+  "factions": [
+    "Crown_Knights", "Arcane_Order", "Shadow_Guild", "Dragon_Clan",
+    "Forest_Wardens", "Iron_Forged", "Ethereal_Council", "Void_Walkers",
+    "Sun_Kingdom", "Moon_Elves", "Dwarven_Clans", "Orc_Tribes",
+    "Mountain_Clans", "River_Folk", "Desert_Nomads", "Island_Kingdom"
+  ],
+  "alignments": [
+    "Lawful_Good", "Neutral_Good", "Chaotic_Good",
+    "Lawful_Neutral", "True_Neutral", "Chaotic_Neutral",
+    "Lawful_Evil", "Neutral_Evil", "Chaotic_Evil"
+  ],
+  "object_types": [
+    "weapon", "armor", "tool", "consumable", "treasure",
+    "material", "magic_item", "quest_item", "container"
+  ],
+  "object_subtypes": [
+    "sword", "shield", "staff", "dagger", "bow", "armor",
+    "ring", "potion", "scroll", "wand", "axe", "hammer",
+    "spear", "crossbow", "helmet", "boots", "gloves", "cloak",
+    "amulet", "crystal", "gem", "key", "map", "book", "lantern"
+  ],
+  "scene_types": [
+    "courtyard", "interior", "exterior", "cave", "forest",
+    "dungeon", "temple", "village", "castle", "mountain",
+    "tower", "ruins", "garden", "crypt", "tunnel",
+    "island", "coast", "valley", "desert", "swamp"
+  ],
+  "terrain_types": [
+    "plains", "mountains", "forest", "coastal", "underground",
+    "desert", "swamp", "tundra", "hills", "jungle"
+  ],
+  "climates": [
+    "temperate", "arctic", "desert", "tropical", "mediterranean",
+    "continental", "subtropical", "polar", "monsoon"
+  ],
+  "status_variables": {
+    "character": ["health", "stamina", "hunger", "thirst", "morale", "is_alive", "is_resting", "current_emotion"],
+    "object": ["durability", "weight", "value", "is_equipped", "is_broken", "quality"]
+  },
+  "trust_calculation": {
+    "base_trust": 0.5,
+    "same_faction_bonus": 0.2,
+    "opposite_faction_penalty": -0.2,
+    "positive_relationship_bonus": 0.1,
+    "negative_relationship_penalty": -0.1,
+    "cooperation_history_weight": 0.3
+  }
+}
