@@ -12,7 +12,7 @@ Run the following commands
 ```
 python swm_generate.py
 ```
-This will generate several jsons (`characters.json`, `objects.json`, `rules.json`, `scenes.json`, `world_states.json` and concatenating all the info in `knowledge_base.json` ) that will be exported in `world_X-Y/` where X-Y is the date of the generation.
+This will generate several jsons (`characters.json`, `objects.json`, `rules.json`, `scenes.json`, `world_states.json`, `action_catalog.json`, `condition_registry.json`, `character_graph.json` and concatenating all the info in `knowledge_base.json` ) that will be exported in `world_X-Y/` where X-Y is the date of the generation.
 
 Then run this to execute the simulated world:
 ```
