@@ -4,7 +4,7 @@
 
 For editing your world characters, objects and scene names, modify `objects_names.txt`, `characters_names.txt` and `scenes_names.txt` if needed.
 
-Then edit `world_vocabulary.json`, `generation_config.json`, `action_catalog.json`,  `world_dynamics.json` to change the world and assets mechanics.
+Then edit `world_vocabulary.json`, `generation_config.json`, `world_dynamics.json` to change the world and assets mechanics.
 
 ## Generate and Simulate Worlds
 
@@ -12,7 +12,7 @@ Run the following commands
 ```
 python swm_generate.py
 ```
-This will generate several jsons (`characters.json`, `objects.json`, `rules.json`, `scenes.json`, `world_states.json` and concatenating all the info in `knowledge_base.json` ) that will be exported in `world_X-Y/` where X-Y is the date of the generation.
+This will generate several jsons (`characters.json`, `objects.json`, `rules.json`, `scenes.json`, `world_states.json`, `action_catalog.json`, `condition_registry.json`, `character_graph.json` and concatenating all the info in `knowledge_base.json` ) that will be exported in `world_X-Y/` where X-Y is the date of the generation.
 
 Then run this to execute the simulated world:
 ```
