@@ -12,6 +12,7 @@ import random
 import sys
 import signal
 import threading
+import select
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
@@ -22,7 +23,8 @@ from swm_corpus_loader import DynamicEntity
 class WorldRunner:
     """Main runner for the simulated world with emotion, reasoning, and rule-bound actions"""
     
-    def __init__(self, fps: float = 1.0, load_existing: bool = True, world_folder: str = None, interact: bool = False):
+    def __init__(self, fps: float = 1.0, load_existing: bool = True, world_folder: str = None, 
+                 interact: bool = False, dynamic: bool = False):
         self.fps = fps
         self.tick_interval = 1.0 / fps
         self.running = False
@@ -32,10 +34,15 @@ class WorldRunner:
         self.max_history = 100
         self.world_folder = world_folder
         self.interact = interact
+        self.dynamic = dynamic
         self.shutdown_requested = False
         self.continuous_mode = False
         self.continuous_thread = None
-        self.auto_render = True  # Always render after each update
+        self.auto_render = True
+        self.input_buffer = ""
+        self.mode = "auto"
+        self.last_render_time = 0
+        self.min_render_interval = 0.5  # Minimum time between renders to avoid spam
         
         # Load all configurations from JSON
         self.vocab = self._load_json("world_vocabulary.json")
@@ -76,10 +83,7 @@ class WorldRunner:
     
     def _setup_signal_handlers(self):
         """Set up signal handlers for graceful shutdown"""
-        # Handle Ctrl+C (SIGINT)
         signal.signal(signal.SIGINT, self._signal_handler)
-        
-        # Handle Ctrl+Z (SIGTSTP) - only on Unix
         if hasattr(signal, 'SIGTSTP'):
             signal.signal(signal.SIGTSTP, self._signal_handler)
     
@@ -90,12 +94,10 @@ class WorldRunner:
         self.running = False
         self.continuous_mode = False
         
-        # Save state immediately
         if self.world:
             self._save_runtime_state()
             self._flush_log()
         
-        # For SIGTSTP (Ctrl+Z), we want to exit cleanly
         if signum == signal.SIGTSTP:
             sys.exit(0)
 
@@ -268,7 +270,6 @@ class WorldRunner:
     
     def _load_variable_catalog(self) -> Dict[str, List[str]]:
         """Load variable catalog from world folder or root"""
-        # Try to load from world folder first
         var_path = os.path.join(self.world_folder, "variable_catalog.json")
         if os.path.exists(var_path):
             try:
@@ -278,7 +279,6 @@ class WorldRunner:
             except Exception as e:
                 print(f"[ERROR] Failed to load {var_path}: {e}")
         
-        # Try root directory
         if os.path.exists("variable_catalog.json"):
             try:
                 with open("variable_catalog.json", 'r', encoding='utf-8') as f:
@@ -287,34 +287,20 @@ class WorldRunner:
             except Exception as e:
                 print(f"[ERROR] Failed to load variable_catalog.json: {e}")
         
-        # Default variable catalog
         return {
             'character_variables': [
-                'health',
-                'stamina', 
-                'hunger',
-                'thirst',
-                'energy',
-                'morale',
-                'loyalty',
-                'trust'
+                'health', 'stamina', 'hunger', 'thirst', 'energy', 'morale', 'loyalty', 'trust'
             ],
             'object_variables': [
-                'durability',
-                'quality',
-                'quantity',
-                'charge'
+                'durability', 'quality', 'quantity', 'charge'
             ],
             'world_states': [
-                'time_of_day',
-                'weather',
-                'season',
-                'resource_abundance'
+                'time_of_day', 'weather', 'season', 'resource_abundance'
             ]
         }
     
     def _initialize_world(self, load_existing: bool):
-        """Initialize the world with SWM module, loading existing runtime state if available"""
+        """Initialize the world with SWM module"""
         runtime_path = os.path.join(self.world_folder, "world_state_runtime.json")
         
         kwargs = {
@@ -408,7 +394,7 @@ class WorldRunner:
             return False
     
     def _record_initial_state(self):
-        """Record the initial state as events using message templates"""
+        """Record the initial state as events"""
         templates = self.dynamics.get('message_templates', {})
         locations = self._get_vocab('locations', ['Unknown'])
         
@@ -438,7 +424,7 @@ class WorldRunner:
             self._add_event(event, 'entry', 'object', name)
     
     def _update_world(self, render: bool = True):
-        """Update world state, goals, emotions, and rule-bound actions for one tick"""
+        """Update world state for one tick"""
         self.tick_count += 1
         
         timers = self.world.world_states.get('global_timers', {})
@@ -468,12 +454,11 @@ class WorldRunner:
         if self.tick_count % 10 == 0:
             self._save_runtime_state()
         
-        # Render the world state after update if requested
         if render:
             self._render()
 
     def _process_character_social_actions(self, char: DynamicEntity, all_chars: List[DynamicEntity]):
-        """Evaluate character actions against rules and social relationships (e.g., War/Alliances)"""
+        """Process character social actions"""
         if not self.action_catalog:
             return
             
@@ -507,7 +492,7 @@ class WorldRunner:
                 self._add_event(msg, 'action', 'character', char_name)
     
     def _update_time_of_day(self):
-        """Update time of day using world_dynamics.json"""
+        """Update time of day"""
         time_config = self.dynamics.get('world_state_management', {}).get('time_of_day', {})
         if not time_config.get('enabled', False):
             return
@@ -528,7 +513,7 @@ class WorldRunner:
                         break
     
     def _process_global_events(self):
-        """Process all global events from world_dynamics.json"""
+        """Process global events"""
         events_config = self.dynamics.get('global_events', {})
         if not events_config.get('enabled', False):
             return
@@ -548,7 +533,7 @@ class WorldRunner:
                     self._process_event(event_type)
     
     def _check_event_trigger(self, trigger: Dict[str, Any]) -> bool:
-        """Check if an event trigger condition is met"""
+        """Check event trigger condition"""
         trigger_type = trigger.get('type', 'random')
         condition = trigger.get('condition', '')
         probability = trigger.get('probability', 0.5)
@@ -575,7 +560,7 @@ class WorldRunner:
         return True
     
     def _process_event(self, event_config: Dict[str, Any]):
-        """Process a single event from configuration"""
+        """Process a single event"""
         event_id = event_config.get('id', 'event')
         
         if event_id == 'character_action':
@@ -597,7 +582,7 @@ class WorldRunner:
             self._apply_effect(effect)
     
     def _build_event_message(self, event_config: Dict[str, Any]) -> str:
-        """Build event message from config"""
+        """Build event message"""
         template = event_config.get('message_template', '[EVENT] An event occurred')
         placeholders = event_config.get('placeholders', {})
         
@@ -632,7 +617,7 @@ class WorldRunner:
         return message
     
     def _apply_effect(self, effect: Dict[str, Any]):
-        """Apply an effect from config"""
+        """Apply an effect"""
         effect_type = effect.get('type')
         target = effect.get('target')
         operation = effect.get('operation')
@@ -659,13 +644,13 @@ class WorldRunner:
                 self.world.set_global_flag(target, bool(value))
     
     def _update_character(self, char: DynamicEntity):
-        """Update a single character using status_changes from config"""
+        """Update a single character"""
         self._update_character_status(char)
         self._update_character_movement(char)
         self._update_ai_state(char)
     
     def _update_character_status(self, char: DynamicEntity):
-        """Update character status using status_changes from config"""
+        """Update character status"""
         char_status_config = self.dynamics.get('status_changes', {}).get('character_status', {})
         status = char.get('status_variables', {})
         if not status:
@@ -699,7 +684,7 @@ class WorldRunner:
         char.set('status_variables', status)
     
     def _update_character_movement(self, char: DynamicEntity):
-        """Update character movement using character_movement from config"""
+        """Update character movement"""
         movement_config = self.dynamics.get('character_movement', {})
         if not movement_config.get('enabled', False):
             return
@@ -724,7 +709,7 @@ class WorldRunner:
                         self._add_event(event, 'movement', 'character', name)
     
     def _update_ai_state(self, char: DynamicEntity):
-        """Update AI state using ai_state_changes from config"""
+        """Update AI state"""
         ai_config = self.dynamics.get('ai_state_changes', {})
         transitions = ai_config.get('transitions', [])
         
@@ -746,7 +731,7 @@ class WorldRunner:
                     break
     
     def _evaluate_ai_condition(self, condition: Dict[str, Any], char: DynamicEntity, status: Dict) -> bool:
-        """Evaluate an AI condition from JSON config"""
+        """Evaluate AI condition"""
         if not condition:
             return True
         
@@ -780,7 +765,7 @@ class WorldRunner:
         return True
     
     def _update_object(self, obj: DynamicEntity):
-        """Update a single object using object_status from config"""
+        """Update a single object"""
         object_status_config = self.dynamics.get('status_changes', {}).get('object_status', {})
         variables = obj.get('object_variables', {})
         
@@ -813,7 +798,7 @@ class WorldRunner:
         obj.set('object_variables', variables)
     
     def _add_event(self, text: str, event_type: str, entity_type: str, entity_name: str = None):
-        """Add an event to the history"""
+        """Add an event to history"""
         self.event_history.append({
             'tick': self.tick_count,
             'type': event_type,
@@ -837,7 +822,7 @@ class WorldRunner:
         return str(value)
     
     def _render(self):
-        """Render current world state including character emotions, goals, and reasoning states"""
+        """Render current world state"""
         display = self.dynamics.get('display', {})
         header_width = display.get('header_width', 80)
         separator = display.get('header_separator', '=')
@@ -861,7 +846,6 @@ class WorldRunner:
             formatted = self._get_display_field(field, ws, global_states, timers)
             output_lines.append(f"  {formatted}")
         
-        # Characters with Emotions, Goals, and AI States
         char_display = display.get('character_display', {})
         chars = self.world.characters.get_all()
         output_lines.append(f"\n[{char_display.get('label', 'CHARACTERS')}] ({len(chars)})")
@@ -880,7 +864,6 @@ class WorldRunner:
             
             output_lines.append(f"  * {name} [{ai_state}] | Goal: {goal} | Emotion: {emotion} | HP:{health} | ST:{stamina} @ {location}")
         
-        # Recent Events
         events_display = display.get('events_display', {})
         max_events = events_display.get('max_display', 10)
         output_lines.append(f"\n[{events_display.get('label', 'RECENT EVENTS')}]")
@@ -899,313 +882,420 @@ class WorldRunner:
         self._flush_log()
         sys.stdout.flush()
 
-    def _continuous_loop(self):
-        """Run the continuous update loop"""
-        while self.continuous_mode and self.running and not self.shutdown_requested:
-            start_time = time.time()
-            
-            self._update_world(render=True)  # Always render in continuous mode
-            
-            elapsed = time.time() - start_time
-            sleep_time = max(0, self.tick_interval - elapsed)
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-
-    def run(self):
-        """Run the main visualization loop or interactive shell mode"""
-        self.running = True
+    def _process_command(self, cmd: str) -> bool:
+        """Process a command, returns True if should exit"""
+        cmd = cmd.strip().lower()
         
-        if self.interact:
-            print("\n" + "="*70)
-            print("INTERACTIVE SHELL MODE ACTIVE")
-            print("Commands:")
-            print("  [Enter] / n / next    - Step forward 1 simulation epoch (auto-displays summary)")
-            print("  c / continue          - Run continuously with auto-render")
-            print("  s / save              - Save current world state")
-            print("  summary               - Print full world and character status summary")
-            print("  catalog               - List all available actions in catalog")
-            print("  var                   - List all available variables")
-            print("  list                  - List all characters, states, and HP")
+        if not cmd:
+            return False
+        
+        parts = cmd.split()
+        command = parts[0].lower()
+        
+        if command in ['q', 'quit', 'exit']:
+            print("\n[STOP] Saving state and shutting down...")
+            self.shutdown_requested = True
+            self.running = False
+            self._save_runtime_state()
+            self._flush_log()
+            return True
+            
+        elif command == 'help':
+            print("\n" + "="*60)
+            print("AVAILABLE COMMANDS")
+            print("="*60)
+            print("  [Enter]              - Force an immediate tick update")
+            print("  help                 - Show this help menu")
+            print("  summary              - Print full world and character status summary")
+            print("  catalog              - List all available actions in catalog")
+            print("  var                  - List all available variables")
+            print("  list                 - List all characters, states, and HP")
             print("  action <Name> <ACTION> - Force character action intent")
             print("  set char <Name> <var> <val> - Modify character status variable")
             print("  set world <key> <val> - Modify global world state")
-            print("  q / quit / exit       - Save and exit")
-            print("-"*70)
-            print(" List of actions:" )
-            print(self.action_catalog)
-            print("="*70)
+            print("  save                 - Save current world state")
+            print("  mode                 - Show current mode")
+            print("  q / quit / exit      - Save and exit")
+            print("="*60)
             
-            # Show initial world state
+        elif command == 'mode':
+            print(f"\n[CURRENT MODE] {self.mode.upper()}")
+            if self.mode == "dynamic":
+                print(f"  - Running continuously at {self.fps} FPS")
+                print("  - Commands can be typed at any time")
+            elif self.mode == "interactive":
+                print("  - Step-by-step mode")
+                print("  - Press Enter or type 'n' to advance one epoch")
+            else:
+                print("  - Automatic mode")
+                print("  - Running continuously without command input")
+            
+        elif command == 'summary':
             self._render()
             
-            # Use simple input() - it works reliably on Windows
-            while self.running and not self.shutdown_requested:
-                try:
-                    # If we're in continuous mode, don't show prompt
-                    if self.continuous_mode:
-                        time.sleep(0.1)
-                        continue
-                    
-                    # Print prompt and wait for input
-                    sys.stdout.write("\nswm-interactive> ")
-                    sys.stdout.flush()
-                    
-                    # Use sys.stdin.readline() which is more reliable than input() in some cases
-                    cmd = sys.stdin.readline()
-                    
-                    # Check for EOF (Ctrl+D on Unix, or if stdin is closed)
-                    if not cmd:
-                        print("\n[STOP] EOF detected. Saving state and shutting down...")
-                        self.shutdown_requested = True
-                        self.running = False
-                        self._save_runtime_state()
-                        self._flush_log()
-                        break
-                    
-                    cmd = cmd.strip().lower()
-                    
-                    if not cmd or cmd in ['n', 'next']:
-                        self._update_world(render=True)  # Auto-render after each step
-                        continue
-                    
-                    if cmd in ['c', 'continue']:
-                        print(f"[START] Continuous mode activated at {self.fps} FPS. Press Ctrl+C to stop.")
-                        self.continuous_mode = True
-                        self._continuous_loop()
-                        # When continuous loop exits, we'll be back here
-                        print(f"[STOP] Continuous mode stopped at Epoch {self.tick_count}")
-                        # Show the final state after continuous mode stops
-                        self._render()
-                        continue
-                    
-                    if cmd in ['s', 'save']:
-                        self._save_runtime_state()
-                        print(f"[OK] World state saved at Epoch {self.tick_count}")
-                        continue
-                    
-                    parts = cmd.split()
-                    command = parts[0].lower()
-                    
-                    if command in ['q', 'quit', 'exit']:
-                        print("\n[STOP] Saving state and shutting down...")
-                        self.shutdown_requested = True
-                        self.running = False
-                        self._save_runtime_state()
-                        self._flush_log()
-                        break
-                        
-                    elif command == 'help':
-                        print("\n" + "="*60)
-                        print("INTERACTIVE COMMAND MENU")
-                        print("="*60)
-                        print("  [Enter] / n / next    - Step forward 1 simulation epoch (auto-displays summary)")
-                        print("  c / continue          - Run continuously with auto-render")
-                        print("  s / save              - Save current world state")
-                        print("  summary               - Print full world and character status summary")
-                        print("  help                  - Show this help menu")
-                        print("  catalog               - List all available actions in catalog")
-                        print("  var                   - List all available variables")
-                        print("  list                  - List all characters, states, and HP")
-                        print("  action <Name> <ACTION> - Force character action intent")
-                        print("  set char <Name> <var> <val> - Modify character status variable")
-                        print("  set world <key> <val> - Modify global world state")
-                        print("  q / quit / exit       - Save and exit")
-                        print("="*60)
-                        
-                    elif command == 'summary':
-                        self._render()
-                        
-                    elif command == 'catalog':
-                        print("\n[ACTION CATALOG]")
-                        for idx, act in enumerate(self.action_catalog, 1):
-                            print(f"  {idx}. {act}")
-                    
-                    elif command == 'var':
-                        print("\n[VARIABLE CATALOG]")
-                        
-                        # Character variables
-                        char_vars = self.variable_catalog.get('character_variables', [])
-                        if char_vars:
-                            print("\n  CHARACTER VARIABLES:")
-                            for var in char_vars:
-                                print(f"    - {var}")
-                        
-                        # Object variables
-                        obj_vars = self.variable_catalog.get('object_variables', [])
-                        if obj_vars:
-                            print("\n  OBJECT VARIABLES:")
-                            for var in obj_vars:
-                                print(f"    - {var}")
-                        
-                        # World states
-                        world_vars = self.variable_catalog.get('world_states', [])
-                        if world_vars:
-                            print("\n  WORLD STATES:")
-                            for var in world_vars:
-                                print(f"    - {var}")
-                        
-                        print()
-                            
-                    elif command == 'list':
-                        print("\n[CHARACTERS]")
-                        for c in self.world.characters.get_all():
-                            status = c.get('status_variables', {})
-                            # Show all status variables
-                            status_str = ", ".join([f"{k}:{v}" for k, v in status.items()]) if status else "No status"
-                            print(f"  - {c.get('name')} | State: {c.get('ai_state')} | {status_str} | Location: {c.get('navigation', {}).get('current_location')}")
-                        
-                        print("\n[OBJECTS]")
-                        for obj in self.world.objects.get_all():
-                            vars_str = ", ".join([f"{k}:{v}" for k, v in obj.get('object_variables', {}).items()]) if obj.get('object_variables') else "No variables"
-                            print(f"  - {obj.get('name')} | Type: {obj.get('properties', {}).get('type', 'unknown')} | {vars_str}")
-                        
-                        print("\n[WORLD STATES]")
-                        ws = self.world.world_states.to_dict()
-                        for key, value in ws.items():
-                            if key not in ['global_timers', 'global_states']:
-                                print(f"  - {key}: {value}")
-                        if 'global_states' in ws:
-                            for key, value in ws['global_states'].items():
-                                print(f"  - global_states.{key}: {value}")
-                        if 'global_timers' in ws:
-                            for key, value in ws['global_timers'].items():
-                                print(f"  - global_timers.{key}: {value}")
-                            
-                    elif command == 'action':
-                        if len(parts) < 3:
-                            print("[ERROR] Usage: action <CharacterName> <ACTION_NAME>")
-                            continue
-                        char_name = parts[1]
-                        action_intent = parts[2].upper()
-                        
-                        if self.action_catalog and action_intent not in self.action_catalog:
-                            print(f"[ERROR] '{action_intent}' is invalid. Type 'catalog' to check valid actions.")
-                            continue
-                        
-                        target_char = next((c for c in self.world.characters.get_all() if c.get('name', '').lower() == char_name.lower()), None)
-                        if target_char:
-                            loc = target_char.get('navigation', {}).get('current_location', 'Unknown')
-                            msg = f"[ACTION] {target_char.get('name')} performs '{action_intent}' at {loc}"
-                            self._add_event(msg, 'user_action', 'character', target_char.get('name'))
-                            print(f"[OK] {msg}")
-                        else:
-                            print(f"[ERROR] Character '{char_name}' not found.")
-                            
-                    elif command == 'set':
-                        if len(parts) < 4:
-                            print("[ERROR] Usage: set char <Name> <var> <val> OR set world <key> <val>")
-                            continue
-                        sub_target = parts[1].lower()
-                        
-                        if sub_target == 'char':
-                            if len(parts) < 5:
-                                print("[ERROR] Usage: set char <CharacterName> <variable> <value>")
-                                continue
-                            char_name = parts[2]
-                            var_name = parts[3]
-                            val_str = parts[4]
-                            
-                            target_char = next((c for c in self.world.characters.get_all() if c.get('name', '').lower() == char_name.lower()), None)
-                            if target_char:
-                                status = target_char.get('status_variables', {})
-                                if var_name in status:
-                                    try:
-                                        orig_val = status[var_name]
-                                        if isinstance(orig_val, bool):
-                                            new_val = val_str.lower() in ['true', '1', 'yes']
-                                        elif isinstance(orig_val, int):
-                                            new_val = int(val_str)
-                                        elif isinstance(orig_val, float):
-                                            new_val = float(val_str)
-                                        else:
-                                            new_val = val_str
-                                        
-                                        status[var_name] = new_val
-                                        target_char.set('status_variables', status)
-                                        print(f"[OK] Set {target_char.get('name')}'s {var_name} to {new_val}")
-                                        self._add_event(f"[ADMIN] Set {target_char.get('name')}'s {var_name} to {new_val}", 'admin', 'character', target_char.get('name'))
-                                    except ValueError:
-                                        print(f"[ERROR] Invalid number format for value '{val_str}'.")
-                                else:
-                                    print(f"[ERROR] Status variable '{var_name}' not found. Type 'var' to see available variables.")
+        elif command == 'catalog':
+            print("\n[ACTION CATALOG]")
+            for idx, act in enumerate(self.action_catalog, 1):
+                print(f"  {idx}. {act}")
+        
+        elif command == 'var':
+            print("\n[VARIABLE CATALOG]")
+            char_vars = self.variable_catalog.get('character_variables', [])
+            if char_vars:
+                print("\n  CHARACTER VARIABLES:")
+                for var in char_vars:
+                    print(f"    - {var}")
+            obj_vars = self.variable_catalog.get('object_variables', [])
+            if obj_vars:
+                print("\n  OBJECT VARIABLES:")
+                for var in obj_vars:
+                    print(f"    - {var}")
+            world_vars = self.variable_catalog.get('world_states', [])
+            if world_vars:
+                print("\n  WORLD STATES:")
+                for var in world_vars:
+                    print(f"    - {var}")
+            print()
+                
+        elif command == 'list':
+            print("\n[CHARACTERS]")
+            for c in self.world.characters.get_all():
+                status = c.get('status_variables', {})
+                status_str = ", ".join([f"{k}:{v}" for k, v in status.items()]) if status else "No status"
+                print(f"  - {c.get('name')} | State: {c.get('ai_state')} | {status_str} | Location: {c.get('navigation', {}).get('current_location')}")
+            
+            print("\n[OBJECTS]")
+            for obj in self.world.objects.get_all():
+                vars_str = ", ".join([f"{k}:{v}" for k, v in obj.get('object_variables', {}).items()]) if obj.get('object_variables') else "No variables"
+                print(f"  - {obj.get('name')} | Type: {obj.get('properties', {}).get('type', 'unknown')} | {vars_str}")
+            
+            print("\n[WORLD STATES]")
+            ws = self.world.world_states.to_dict()
+            for key, value in ws.items():
+                if key not in ['global_timers', 'global_states']:
+                    print(f"  - {key}: {value}")
+            if 'global_states' in ws:
+                for key, value in ws['global_states'].items():
+                    print(f"  - global_states.{key}: {value}")
+            if 'global_timers' in ws:
+                for key, value in ws['global_timers'].items():
+                    print(f"  - global_timers.{key}: {value}")
+                
+        elif command == 'action':
+            if len(parts) < 3:
+                print("[ERROR] Usage: action <CharacterName> <ACTION_NAME>")
+                return False
+            char_name = parts[1]
+            action_intent = parts[2].upper()
+            
+            if self.action_catalog and action_intent not in self.action_catalog:
+                print(f"[ERROR] '{action_intent}' is invalid. Type 'catalog' to check valid actions.")
+                return False
+            
+            target_char = next((c for c in self.world.characters.get_all() if c.get('name', '').lower() == char_name.lower()), None)
+            if target_char:
+                loc = target_char.get('navigation', {}).get('current_location', 'Unknown')
+                msg = f"[ACTION] {target_char.get('name')} performs '{action_intent}' at {loc}"
+                self._add_event(msg, 'user_action', 'character', target_char.get('name'))
+                print(f"[OK] {msg}")
+            else:
+                print(f"[ERROR] Character '{char_name}' not found.")
+                
+        elif command == 'set':
+            if len(parts) < 4:
+                print("[ERROR] Usage: set char <Name> <var> <val> OR set world <key> <val>")
+                return False
+            sub_target = parts[1].lower()
+            
+            if sub_target == 'char':
+                if len(parts) < 5:
+                    print("[ERROR] Usage: set char <CharacterName> <variable> <value>")
+                    return False
+                char_name = parts[2]
+                var_name = parts[3]
+                val_str = parts[4]
+                
+                target_char = next((c for c in self.world.characters.get_all() if c.get('name', '').lower() == char_name.lower()), None)
+                if target_char:
+                    status = target_char.get('status_variables', {})
+                    if var_name in status:
+                        try:
+                            orig_val = status[var_name]
+                            if isinstance(orig_val, bool):
+                                new_val = val_str.lower() in ['true', '1', 'yes']
+                            elif isinstance(orig_val, int):
+                                new_val = int(val_str)
+                            elif isinstance(orig_val, float):
+                                new_val = float(val_str)
                             else:
-                                print(f"[ERROR] Character '{char_name}' not found.")
-                                
-                        elif sub_target == 'world':
-                            key = parts[2]
-                            val_str = parts[3]
-                            try:
-                                if val_str.lower() in ['true', 'false']:
-                                    new_val = val_str.lower() == 'true'
-                                else:
-                                    try:
-                                        new_val = float(val_str) if '.' in val_str else int(val_str)
-                                    except ValueError:
-                                        new_val = val_str
-                                        
-                                self.world.world_states.set(key, new_val)
-                                print(f"[OK] Set world state '{key}' to {new_val}")
-                                self._add_event(f"[ADMIN] Set world state '{key}' to {new_val}", 'admin', 'world')
-                            except Exception as e:
-                                print(f"[ERROR] Failed to set world state: {e}")
+                                new_val = val_str
+                            
+                            status[var_name] = new_val
+                            target_char.set('status_variables', status)
+                            print(f"[OK] Set {target_char.get('name')}'s {var_name} to {new_val}")
+                            self._add_event(f"[ADMIN] Set {target_char.get('name')}'s {var_name} to {new_val}", 'admin', 'character', target_char.get('name'))
+                        except ValueError:
+                            print(f"[ERROR] Invalid number format for value '{val_str}'.")
+                    else:
+                        print(f"[ERROR] Status variable '{var_name}' not found. Type 'var' to see available variables.")
+                else:
+                    print(f"[ERROR] Character '{char_name}' not found.")
+                    
+            elif sub_target == 'world':
+                key = parts[2]
+                val_str = parts[3]
+                try:
+                    if val_str.lower() in ['true', 'false']:
+                        new_val = val_str.lower() == 'true'
+                    else:
+                        try:
+                            new_val = float(val_str) if '.' in val_str else int(val_str)
+                        except ValueError:
+                            new_val = val_str
+                            
+                    self.world.world_states.set(key, new_val)
+                    print(f"[OK] Set world state '{key}' to {new_val}")
+                    self._add_event(f"[ADMIN] Set world state '{key}' to {new_val}", 'admin', 'world')
+                except Exception as e:
+                    print(f"[ERROR] Failed to set world state: {e}")
+            else:
+                print("[ERROR] Unknown set target. Use 'set char' or 'set world'.")
+                
+        elif command == 'save':
+            self._save_runtime_state()
+            print(f"[OK] World state saved at Epoch {self.tick_count}")
+            
+        else:
+            print(f"[ERROR] Unknown command '{command}'. Type 'help' for options.")
+        
+        return False
+
+    def _run_dynamic_mode(self):
+        """Dynamic mode - continuous simulation with command input"""
+        self.mode = "dynamic"
+        print("\n" + "="*70)
+        print("DYNAMIC MODE ACTIVE")
+        print(f"Running at {self.fps} FPS. Type commands anytime (press Enter to execute).")
+        print("Type 'help' for available commands, 'q' to quit.")
+        print("="*70)
+        
+        # Show initial state
+        self._render()
+        
+        cmd_buffer = ""
+        last_tick_time = time.time()
+        prompt_shown = True
+        
+        print("[DYNAMIC] ", end="", flush=True)
+        
+        while self.running and not self.shutdown_requested:
+            try:
+                current_time = time.time()
+                
+                # Check for input without blocking (works on both Windows and Unix)
+                if sys.platform == 'win32':
+                    import msvcrt
+                    if msvcrt.kbhit():
+                        char = msvcrt.getch()
+                        if char == b'\r':  # Enter key
+                            print()  # New line after Enter
+                            if cmd_buffer.strip():
+                                # Process the command
+                                should_exit = self._process_command(cmd_buffer.strip())
+                                cmd_buffer = ""
+                                if should_exit:
+                                    return
+                            else:
+                                # Force an immediate tick
+                                self._update_world(render=True)
+                            print("[DYNAMIC] ", end="", flush=True)
+                            prompt_shown = True
+                            last_tick_time = current_time
+                        elif char == b'\x08':  # Backspace
+                            if cmd_buffer:
+                                cmd_buffer = cmd_buffer[:-1]
+                                print("\b \b", end="", flush=True)
                         else:
-                            print("[ERROR] Unknown set target. Use 'set char' or 'set world'.")
-                    else:
-                        print(f"[ERROR] Unknown command '{command}'. Type 'help' for options.")
-                        
-                except KeyboardInterrupt:
-                    # Ctrl+C - if in continuous mode, stop it
-                    if self.continuous_mode:
-                        print("\n[STOP] Continuous mode interrupted.")
-                        self.continuous_mode = False
-                        # Show the final state after continuous mode stops
-                        self._render()
-                        continue
-                    else:
-                        print("\n[STOP] Keyboard interrupt detected. Saving state and shutting down...")
-                        self.shutdown_requested = True
-                        self.running = False
-                        self._save_runtime_state()
-                        self._flush_log()
-                        break
-                except EOFError:
-                    # Ctrl+D or Ctrl+Z
+                            try:
+                                decoded = char.decode('utf-8')
+                                if decoded.isprintable():
+                                    cmd_buffer += decoded
+                                    print(decoded, end="", flush=True)
+                                    prompt_shown = False
+                            except UnicodeDecodeError:
+                                pass
+                else:
+                    # Unix - use select
+                    if select.select([sys.stdin], [], [], 0.01)[0]:
+                        char = sys.stdin.read(1)
+                        if char == '\n' or char == '\r':
+                            print()  # New line after Enter
+                            if cmd_buffer.strip():
+                                should_exit = self._process_command(cmd_buffer.strip())
+                                cmd_buffer = ""
+                                if should_exit:
+                                    return
+                            else:
+                                self._update_world(render=True)
+                            print("[DYNAMIC] ", end="", flush=True)
+                            prompt_shown = True
+                            last_tick_time = current_time
+                        elif char == '\x7f' or char == '\x08':
+                            if cmd_buffer:
+                                cmd_buffer = cmd_buffer[:-1]
+                                print("\b \b", end="", flush=True)
+                        elif char.isprintable():
+                            cmd_buffer += char
+                            print(char, end="", flush=True)
+                            prompt_shown = False
+                
+                # Update the world if enough time has passed
+                elapsed_since_tick = current_time - last_tick_time
+                if elapsed_since_tick >= self.tick_interval:
+                    self._update_world(render=True)
+                    last_tick_time = current_time
+                    # Show prompt again after render if not already showing
+                    if not prompt_shown:
+                        print("[DYNAMIC] ", end="", flush=True)
+                        prompt_shown = True
+                else:
+                    # Small sleep to prevent CPU spinning
+                    time.sleep(0.01)
+                    
+            except KeyboardInterrupt:
+                print("\n[STOP] Dynamic mode interrupted. Saving state...")
+                self.shutdown_requested = True
+                self.running = False
+                self._save_runtime_state()
+                self._flush_log()
+                break
+            except Exception as e:
+                print(f"\n[ERROR] {e}")
+                # Try to recover
+                print("[DYNAMIC] ", end="", flush=True)
+                continue
+
+    def _run_interactive_mode(self):
+        """Interactive mode - step-by-step with command input"""
+        self.mode = "interactive"
+        print("\n" + "="*70)
+        print("INTERACTIVE MODE ACTIVE")
+        print("Commands: [Enter] / n / next - Step forward one epoch")
+        print("          c / continue       - Run continuously (Ctrl+C to stop)")
+        print("          Type 'help' for all commands")
+        print("="*70)
+        
+        # Show initial state
+        self._render()
+        
+        while self.running and not self.shutdown_requested:
+            try:
+                sys.stdout.write("\nswm-interactive> ")
+                sys.stdout.flush()
+                
+                cmd = sys.stdin.readline()
+                
+                if not cmd:
                     print("\n[STOP] EOF detected. Saving state and shutting down...")
                     self.shutdown_requested = True
                     self.running = False
                     self._save_runtime_state()
                     self._flush_log()
                     break
-                except Exception as e:
-                    print(f"\n[ERROR] Unexpected error: {e}")
-                    # Don't break on unexpected errors, continue the loop
-                    continue
-        else:
-            print(f"[START] World running automatically at {self.fps} FPS")
-            print("Press Ctrl+C to save and quit")
-            time.sleep(1)
-            
-            try:
-                while self.running and not self.shutdown_requested:
-                    start_time = time.time()
-                    
+                
+                cmd = cmd.strip().lower()
+                
+                if not cmd or cmd in ['n', 'next']:
                     self._update_world(render=True)
+                    continue
+                
+                if cmd in ['c', 'continue']:
+                    print(f"[START] Continuous mode activated at {self.fps} FPS. Press Ctrl+C to stop.")
+                    self.continuous_mode = True
+                    self._run_continuous_loop()
+                    print(f"[STOP] Continuous mode stopped at Epoch {self.tick_count}")
+                    self._render()
+                    continue
+                
+                if cmd in ['s', 'save']:
+                    self._save_runtime_state()
+                    print(f"[OK] World state saved at Epoch {self.tick_count}")
+                    continue
+                
+                if self._process_command(cmd):
+                    return
                     
-                    elapsed = time.time() - start_time
-                    sleep_time = max(0, self.tick_interval - elapsed)
-                    if sleep_time > 0:
-                        time.sleep(sleep_time)
-                        
             except KeyboardInterrupt:
-                print("\n[STOP] Saving state before exit...")
+                if self.continuous_mode:
+                    print("\n[STOP] Continuous mode interrupted.")
+                    self.continuous_mode = False
+                    self._render()
+                    continue
+                else:
+                    print("\n[STOP] Keyboard interrupt detected. Saving state and shutting down...")
+                    self.shutdown_requested = True
+                    self.running = False
+                    self._save_runtime_state()
+                    self._flush_log()
+                    break
+            except EOFError:
+                print("\n[STOP] EOF detected. Saving state and shutting down...")
+                self.shutdown_requested = True
+                self.running = False
                 self._save_runtime_state()
                 self._flush_log()
-                print(f"[OK] World state saved. Ran for {self.tick_count} epochs")
-                print(f"[OK] Log saved to {self.log_file}")
+                break
             except Exception as e:
                 print(f"\n[ERROR] Unexpected error: {e}")
-                self._save_runtime_state()
-                self._flush_log()
+                continue
+
+    def _run_continuous_loop(self):
+        """Run the continuous update loop"""
+        while self.continuous_mode and self.running and not self.shutdown_requested:
+            start_time = time.time()
+            self._update_world(render=True)
+            elapsed = time.time() - start_time
+            sleep_time = max(0, self.tick_interval - elapsed)
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+    def _run_auto_mode(self):
+        """Auto mode - continuous simulation without command input"""
+        self.mode = "auto"
+        print(f"[START] World running automatically at {self.fps} FPS")
+        print("Press Ctrl+C to save and quit")
+        time.sleep(1)
+        
+        try:
+            while self.running and not self.shutdown_requested:
+                start_time = time.time()
+                self._update_world(render=True)
+                elapsed = time.time() - start_time
+                sleep_time = max(0, self.tick_interval - elapsed)
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                    
+        except KeyboardInterrupt:
+            print("\n[STOP] Saving state before exit...")
+            self._save_runtime_state()
+            self._flush_log()
+            print(f"[OK] World state saved. Ran for {self.tick_count} epochs")
+            print(f"[OK] Log saved to {self.log_file}")
+        except Exception as e:
+            print(f"\n[ERROR] Unexpected error: {e}")
+            self._save_runtime_state()
+            self._flush_log()
+
+    def run(self):
+        """Run the main loop based on mode"""
+        self.running = True
+        
+        if self.dynamic:
+            self._run_dynamic_mode()
+        elif self.interact:
+            self._run_interactive_mode()
+        else:
+            self._run_auto_mode()
 
 
 def main():
@@ -1214,14 +1304,16 @@ def main():
     parser.add_argument('--fps', type=float, default=1.0, help='Frames per second (default: 1.0)')
     parser.add_argument('--new', action='store_true', help='Create a new world state (ignore existing)')
     parser.add_argument('--world', type=str, help='Specify a world folder to load')
-    parser.add_argument('--interact', action='store_true', help='Enable interactive shell command mode')
+    parser.add_argument('--interact', action='store_true', help='Interactive step-by-step mode')
+    parser.add_argument('--dynamic', action='store_true', help='Dynamic mode: continuous simulation with command input')
     args = parser.parse_args()
     
     runner = WorldRunner(
         fps=args.fps, 
         load_existing=not args.new, 
         world_folder=args.world,
-        interact=args.interact
+        interact=args.interact,
+        dynamic=args.dynamic
     )
     runner.run()
 
