@@ -130,7 +130,10 @@
     "threat_detected",
     "loss_experienced",
     "goal_achieved",
-    "novelty_detected"
+    "novelty_detected",
+    "contamination_detected",
+    "goal_blocked",
+    "goal_achieved"
   ],
   "emotion_sequence": [
     {"event": "goal_blocked", "step": 1},
@@ -139,7 +142,9 @@
     {"event": "goal_blocked", "step": 4},
     {"event": "novelty_detected", "step": 5},
     {"event": "goal_achieved", "step": 6},
-    {"event": "loss_experienced", "step": 7}
+    {"event": "loss_experienced", "step": 7},
+    {"event": "contamination_detected", "step": 8},
+    {"event": "goal_blocked", "step": 9}
   ],
   "expected_outcomes": {
     "appraisal": {
@@ -149,6 +154,41 @@
       "loss_experienced": "sadness",
       "goal_achieved": "joy",
       "novelty_detected": "surprise"
+    },
+    "memory_sequence_intensities": {
+      "default": {
+        "goal_blocked": 0.60,
+        "goal_achieved_1": 0.71,
+        "threat_detected": 0.70,
+        "loss_experienced": 0.63,
+        "goal_achieved_2": 0.71,
+        "novelty_detected": 0.56,
+        "contamination_detected": 0.54,
+        "goal_blocked_2": 0.64,
+        "goal_achieved_3": 0.69
+      },
+      "high_reactivity": {
+        "goal_blocked": 0.83,
+        "goal_achieved_1": 0.95,
+        "threat_detected": 0.98,
+        "loss_experienced": 0.93,
+        "goal_achieved_2": 0.98,
+        "novelty_detected": 0.84,
+        "contamination_detected": 0.86,
+        "goal_blocked_2": 0.96,
+        "goal_achieved_3": 0.96
+      },
+      "low_reactivity": {
+        "goal_blocked": 0.48,
+        "goal_achieved_1": 0.58,
+        "threat_detected": 0.56,
+        "loss_experienced": 0.50,
+        "goal_achieved_2": 0.57,
+        "novelty_detected": 0.47,
+        "contamination_detected": 0.44,
+        "goal_blocked_2": 0.50,
+        "goal_achieved_3": 0.55
+      }
     }
   }
 }

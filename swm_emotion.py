@@ -326,7 +326,7 @@ def main():
     emotion_manager.configure(config_name=args.config)
     emotion_manager.print_config()
     
-    # Create test character
+    # Create test character with balanced status
     char = DynamicEntity()
     char.set('name', 'TestAgent')
     char.set('status_variables', {
@@ -382,11 +382,12 @@ def main():
         emotion, intensity = emotion_manager.compute_emotion_from_appraisal(char, 'goal_blocked')
         print(f"  Status: {label:25} | Health: {health:3} | Stamina: {stamina:3} -> {emotion:10} (Intensity: {intensity:.2f})")
     
-    # Test 3: Emotional Memory
+    # Test 3: Emotional Memory Sequence (complete event sequence)
     print("\n" + "-"*70)
-    print("TEST 3: Emotional Memory Storage")
+    print("TEST 3: Emotional Memory Sequence")
     print("-"*70)
     
+    # Reset character
     char.set('status_variables', {
         'health': 50,
         'stamina': 50,
@@ -401,21 +402,22 @@ def main():
         }
     })
     
-    for i, event in enumerate(test_loader.memory_sequence):
+    print("  Step | Event                    | Emotion    | Intensity")
+    print("  -----|--------------------------|------------|----------")
+    
+    for i, event in enumerate(test_loader.memory_sequence, 1):
         emotion, intensity = emotion_manager.compute_emotion_from_appraisal(char, event)
         emotion_manager.set_character_emotion(char, emotion, intensity)
         
-        memory = char.get('memory_perception', {})
-        reasoning = memory.get('reasoning_stack', {})
-        em_memory = reasoning.get('emotional_memory', [])
-        
-        print(f"  Step {i+1}: {event:25} -> Emotion: {emotion:10} (Intensity: {intensity:.2f}, Memory: {len(em_memory)})")
+        # Show the event with its emotion and intensity
+        print(f"  {i:4}  | {event:24} | {emotion:10} | {intensity:.2f}")
     
+    # Show final emotional memory
     memory = char.get('memory_perception', {})
     reasoning = memory.get('reasoning_stack', {})
     em_memory = reasoning.get('emotional_memory', [])
     
-    print("\n  Final Emotional Memory:")
+    print("\n  Final Emotional Memory (last 20 entries):")
     for i, entry in enumerate(em_memory):
         print(f"    [{i+1}] {entry['emotion']:10} (Intensity: {entry['intensity']:.2f})")
     
@@ -429,11 +431,12 @@ def main():
         arousal = emotion_manager.get_emotion_arousal(emotion)
         print(f"  {emotion:10} -> {tendency:10} (Arousal: {arousal})")
     
-    # Test 5: Emotion Sequence
+    # Test 5: Emotion Sequence (for comparison across configs)
     print("\n" + "-"*70)
     print("TEST 5: Emotion Sequence Over Time")
     print("-"*70)
     
+    # Reset character
     char.set('status_variables', {
         'health': 50,
         'stamina': 50,
