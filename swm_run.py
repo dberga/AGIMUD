@@ -15,6 +15,7 @@ import threading
 import select
 from datetime import datetime
 from typing import Dict, List, Any, Optional
+import csv
 
 from swm import SimulatedWorldModule
 from swm_corpus_loader import DynamicEntity
@@ -42,7 +43,21 @@ class WorldRunner:
         self.input_buffer = ""
         self.mode = "auto"
         self.last_render_time = 0
-        self.min_render_interval = 0.5  # Minimum time between renders to avoid spam
+        self.min_render_interval = 0.5
+        
+        # Statistics tracking
+        self.statistics = {
+            'characters': {},
+            'global': {
+                'total_ticks': 0,
+                'total_actions': 0,
+                'total_emotion_transitions': 0,
+                'total_movements': 0,
+                'total_social_actions': 0,
+                'emotion_transition_matrix': {}
+            }
+        }
+        self.emotion_history = {}  # Track last emotion per character for transitions
         
         # Load all configurations from JSON
         self.vocab = self._load_json("world_vocabulary.json")
@@ -96,6 +111,7 @@ class WorldRunner:
         
         if self.world:
             self._save_runtime_state()
+            self._export_statistics()
             self._flush_log()
         
         if signum == signal.SIGTSTP:
@@ -330,6 +346,9 @@ class WorldRunner:
             self.world = SimulatedWorldModule(**kwargs)
             self._record_initial_state()
             self._save_runtime_state()
+        
+        # Initialize statistics for characters
+        self._init_statistics()
     
     def _load_runtime_state(self):
         """Load runtime state from file"""
@@ -387,7 +406,8 @@ class WorldRunner:
             with open(runtime_path, 'w', encoding='utf-8') as f:
                 json.dump(runtime_data, f, indent=2, ensure_ascii=False)
             
-            print(f"[SAVE] World state saved at Epoch {self.tick_count}")
+            # Silent save - don't print
+            # print(f"[SAVE] World state saved at Epoch {self.tick_count}")
             return True
         except Exception as e:
             print(f"[ERROR] Failed to save runtime state: {e}")
@@ -423,6 +443,205 @@ class WorldRunner:
                 event = f"[ENTRY] {name} appears"
             self._add_event(event, 'entry', 'object', name)
     
+    def _init_statistics(self):
+        """Initialize statistics tracking for all characters"""
+        for char in self.world.characters.get_all():
+            name = char.get('name', 'Unknown')
+            self.statistics['characters'][name] = {
+                'health_values': [],
+                'stamina_values': [],
+                'morale_values': [],
+                'emotion_transitions': [],
+                'actions_taken': [],
+                'behavior_states': [],
+                'movement_count': 0,
+                'social_action_count': 0,
+                'tick_count': 0
+            }
+            self.emotion_history[name] = None
+    
+    def _export_statistics(self):
+        """Export statistics to CSV and LaTeX files"""
+        if self.tick_count < 1:
+            return
+        
+        # Update final statistics
+        self._update_statistics()
+        
+        # Export CSV
+        csv_path = os.path.join(self.world_folder, "statistics.csv")
+        self._export_csv(csv_path)
+        
+        # Export LaTeX - Character Stats
+        tex_path = os.path.join(self.world_folder, "statistics.tex")
+        self._export_latex(tex_path)
+        
+        # Export LaTeX - Character Properties
+        props_path = os.path.join(self.world_folder, "character_properties.tex")
+        self._export_character_properties(props_path)
+        
+        # Silent export - don't print
+    
+    def _update_statistics(self):
+        """Update statistics from current world state"""
+        # Update global stats
+        self.statistics['global']['total_ticks'] = self.tick_count
+        
+        # Update character stats
+        for char in self.world.characters.get_all():
+            name = char.get('name', 'Unknown')
+            if name not in self.statistics['characters']:
+                continue
+            
+            status = char.get('status_variables', {})
+            stats = self.statistics['characters'][name]
+            
+            if status:
+                stats['health_values'].append(status.get('health', 50))
+                stats['stamina_values'].append(status.get('stamina', 50))
+                stats['morale_values'].append(status.get('morale', 50))
+            
+            stats['behavior_states'].append(char.get('ai_state', 'IDLE'))
+            stats['tick_count'] += 1
+    
+    def _export_csv(self, filepath: str):
+        """Export statistics to CSV file"""
+        try:
+            with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                
+                # Write header
+                writer.writerow([
+                    'Character',
+                    'Ticks',
+                    'Mean_Health', 'Std_Health',
+                    'Mean_Stamina', 'Std_Stamina',
+                    'Mean_Morale', 'Std_Morale',
+                    'Emotion_Transitions',
+                    'Actions_Taken',
+                    'Movement_Count',
+                    'Social_Actions',
+                    'Unique_Behavior_States',
+                    'Most_Common_State'
+                ])
+                
+                # Write data for each character
+                for name, stats in self.statistics['characters'].items():
+                    import statistics as stat
+                    
+                    health = stats['health_values']
+                    stamina = stats['stamina_values']
+                    morale = stats['morale_values']
+                    
+                    writer.writerow([
+                        name,
+                        stats['tick_count'],
+                        round(stat.mean(health), 2) if health else 'N/A',
+                        round(stat.stdev(health), 2) if len(health) > 1 else 'N/A',
+                        round(stat.mean(stamina), 2) if stamina else 'N/A',
+                        round(stat.stdev(stamina), 2) if len(stamina) > 1 else 'N/A',
+                        round(stat.mean(morale), 2) if morale else 'N/A',
+                        round(stat.stdev(morale), 2) if len(morale) > 1 else 'N/A',
+                        len(stats['emotion_transitions']),
+                        len(stats['actions_taken']),
+                        stats['movement_count'],
+                        stats['social_action_count'],
+                        len(set(stats['behavior_states'])),
+                        max(set(stats['behavior_states']), key=stats['behavior_states'].count) if stats['behavior_states'] else 'N/A'
+                    ])
+            
+            # Silent export
+        except Exception as e:
+            print(f"[ERROR] Failed to export CSV: {e}")
+    
+    def _export_latex(self, filepath: str):
+        """Export statistics to LaTeX table"""
+        try:
+            lines = []
+            lines.append("\\begin{table}[htbp]")
+            lines.append("\\centering")
+            lines.append("\\caption{Character Statistics Summary}")
+            lines.append("\\label{tab:character_stats}")
+            lines.append("\\begin{adjustbox}{width=\\columnwidth}")
+            lines.append("\\begin{tabular}{|l|c|c|c|c|c|}")
+            lines.append("\\hline")
+            lines.append("\\textbf{Character} & \\textbf{Ticks} & \\textbf{Health} & \\textbf{Stamina} & \\textbf{Emotion Trans.} & \\textbf{Most Common State} \\\\")
+            lines.append("\\hline")
+            
+            for name, stats in self.statistics['characters'].items():
+                import statistics as stat
+                
+                health = stats['health_values']
+                stamina = stats['stamina_values']
+                
+                health_str = f"{stat.mean(health):.1f}" if health else "N/A"
+                stamina_str = f"{stat.mean(stamina):.1f}" if stamina else "N/A"
+                
+                most_common = max(set(stats['behavior_states']), key=stats['behavior_states'].count) if stats['behavior_states'] else 'N/A'
+                
+                lines.append(f"{name} & {stats['tick_count']} & {health_str} & {stamina_str} & {len(stats['emotion_transitions'])} & {most_common} \\\\")
+            
+            lines.append("\\hline")
+            lines.append("\\end{tabular}")
+            lines.append("\\end{adjustbox}")
+            lines.append("\\end{table}")
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(lines))
+            
+            # Silent export
+        except Exception as e:
+            print(f"[ERROR] Failed to export LaTeX: {e}")
+    
+    def _export_character_properties(self, filepath: str):
+        """Export character properties to LaTeX table"""
+        try:
+            lines = []
+            lines.append("\\begin{table}[htbp]")
+            lines.append("\\centering")
+            lines.append("\\caption{Character Properties}")
+            lines.append("\\label{tab:character_properties}")
+            lines.append("\\begin{adjustbox}{width=\\columnwidth}")
+            lines.append("\\begin{tabular}{|l|c|c|c|c|c|}")
+            lines.append("\\hline")
+            lines.append("\\textbf{Character} & \\textbf{Faction} & \\textbf{Alignment} & \\textbf{Primary Value} & \\textbf{Current Goal} & \\textbf{Emotion} \\\\")
+            lines.append("\\hline")
+            
+            for char in self.world.characters.get_all():
+                name = char.get('name', 'Unknown')
+                
+                social = char.get('social_attributes', {})
+                faction = social.get('faction', 'N/A')
+                alignment = social.get('alignment', 'N/A')
+                
+                # Find primary Schwartz value (highest weight)
+                schwartz = social.get('schwartz_values', {})
+                if schwartz:
+                    primary_value = max(schwartz, key=schwartz.get)
+                    primary_value = f"{primary_value} ({schwartz[primary_value]:.1f})"
+                else:
+                    primary_value = 'N/A'
+                
+                reasoning = char.get('memory_perception', {}).get('reasoning_stack', {})
+                current_goal = reasoning.get('current_goal', 'N/A')
+                
+                emotion = reasoning.get('emotional_state', 'neutral')
+                intensity = reasoning.get('emotion_intensity', 0.0)
+                emotion_str = f"{emotion} ({intensity:.2f})"
+                
+                lines.append(f"{name} & {faction} & {alignment} & {primary_value} & {current_goal} & {emotion_str} \\\\")
+            
+            lines.append("\\hline")
+            lines.append("\\end{tabular}")
+            lines.append("\\end{adjustbox}")
+            lines.append("\\end{table}")
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(lines))
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to export character properties: {e}")
+        
     def _update_world(self, render: bool = True):
         """Update world state for one tick"""
         self.tick_count += 1
@@ -447,12 +666,29 @@ class WorldRunner:
             
             self._update_character(char)
             self._process_character_social_actions(char, chars)
+            
+            # Track emotion transitions
+            name = char.get('name', 'Unknown')
+            if name in self.emotion_history:
+                current_emotion = self.world.get_character_emotion(char)
+                if self.emotion_history[name] is not None and self.emotion_history[name] != current_emotion:
+                    if name in self.statistics['characters']:
+                        self.statistics['characters'][name]['emotion_transitions'].append(
+                            f"{self.emotion_history[name]}->{current_emotion}"
+                        )
+                        self.statistics['global']['total_emotion_transitions'] += 1
+                self.emotion_history[name] = current_emotion
 
         for obj in self.world.objects.get_all():
             self._update_object(obj)
         
+        # Update statistics every tick
+        self._update_statistics()
+        
         if self.tick_count % 10 == 0:
             self._save_runtime_state()
+            # Export statistics every 10 epochs (silent)
+            self._export_statistics()
         
         if render:
             self._render()
@@ -467,6 +703,11 @@ class WorldRunner:
             char_name = char.get('name', 'Unknown')
             location = char.get('navigation', {}).get('current_location', 'Unknown')
             
+            # Track action
+            if char_name in self.statistics['characters']:
+                self.statistics['characters'][char_name]['actions_taken'].append(action)
+                self.statistics['global']['total_actions'] += 1
+            
             target_char = None
             social_actions = ["DECLARE_WAR_AGGRESSIVE", "PROPOSE_PEACE_TREATY", "NEGOTIATE_COOPERATIVE_PACT", "SHARE_RESOURCES_WITH_ALLIES", "ATTACK_ENEMY_GREEDY"]
             
@@ -474,12 +715,20 @@ class WorldRunner:
                 potential_targets = [c for c in all_chars if c.get('name') != char_name]
                 if potential_targets:
                     target_char = random.choice(potential_targets)
+                    if char_name in self.statistics['characters']:
+                        self.statistics['characters'][char_name]['social_action_count'] += 1
+                        self.statistics['global']['total_social_actions'] += 1
             
             validated_action = action
             if hasattr(self.world, 'reasoning_engine') and self.world.reasoning_engine:
                 try:
                     if hasattr(self.world.reasoning_engine, 'system_rules') and self.world.reasoning_engine.system_rules:
-                        validated_action = self.world.reasoning_engine.system_rules.validate_and_filter_action(action)
+                        result = self.world.reasoning_engine.system_rules.validate_and_filter_action(action)
+                        # Extract just the action name from the result
+                        if isinstance(result, dict):
+                            validated_action = result.get('action', action)
+                        else:
+                            validated_action = result
                 except Exception:
                     pass
 
@@ -700,6 +949,12 @@ class WorldRunner:
                         nav['current_location'] = new_loc
                         char.set('navigation', nav)
                         name = char.get('name', 'Unknown')
+                        
+                        # Track movement
+                        if name in self.statistics['characters']:
+                            self.statistics['characters'][name]['movement_count'] += 1
+                            self.statistics['global']['total_movements'] += 1
+                        
                         template = movement_config.get('message_template', 
                             "[MOVEMENT] {character_name} moves from {old_location} to {new_location}")
                         try:
@@ -897,6 +1152,7 @@ class WorldRunner:
             self.shutdown_requested = True
             self.running = False
             self._save_runtime_state()
+            self._export_statistics()
             self._flush_log()
             return True
             
@@ -914,6 +1170,7 @@ class WorldRunner:
             print("  set char <Name> <var> <val> - Modify character status variable")
             print("  set world <key> <val> - Modify global world state")
             print("  save                 - Save current world state")
+            print("  stats                - Export statistics to CSV and LaTeX")
             print("  mode                 - Show current mode")
             print("  q / quit / exit      - Save and exit")
             print("="*60)
@@ -932,6 +1189,10 @@ class WorldRunner:
             
         elif command == 'summary':
             self._render()
+            
+        elif command == 'stats':
+            self._export_statistics()
+            print("[OK] Statistics exported")
             
         elif command == 'catalog':
             print("\n[ACTION CATALOG]")
@@ -1063,6 +1324,7 @@ class WorldRunner:
                 
         elif command == 'save':
             self._save_runtime_state()
+            self._export_statistics()
             print(f"[OK] World state saved at Epoch {self.tick_count}")
             
         else:
@@ -1167,6 +1429,7 @@ class WorldRunner:
                 self.shutdown_requested = True
                 self.running = False
                 self._save_runtime_state()
+                self._export_statistics()
                 self._flush_log()
                 break
             except Exception as e:
@@ -1200,6 +1463,7 @@ class WorldRunner:
                     self.shutdown_requested = True
                     self.running = False
                     self._save_runtime_state()
+                    self._export_statistics()
                     self._flush_log()
                     break
                 
@@ -1219,6 +1483,7 @@ class WorldRunner:
                 
                 if cmd in ['s', 'save']:
                     self._save_runtime_state()
+                    self._export_statistics()
                     print(f"[OK] World state saved at Epoch {self.tick_count}")
                     continue
                 
@@ -1236,6 +1501,7 @@ class WorldRunner:
                     self.shutdown_requested = True
                     self.running = False
                     self._save_runtime_state()
+                    self._export_statistics()
                     self._flush_log()
                     break
             except EOFError:
@@ -1243,6 +1509,7 @@ class WorldRunner:
                 self.shutdown_requested = True
                 self.running = False
                 self._save_runtime_state()
+                self._export_statistics()
                 self._flush_log()
                 break
             except Exception as e:
@@ -1278,12 +1545,14 @@ class WorldRunner:
         except KeyboardInterrupt:
             print("\n[STOP] Saving state before exit...")
             self._save_runtime_state()
+            self._export_statistics()
             self._flush_log()
             print(f"[OK] World state saved. Ran for {self.tick_count} epochs")
             print(f"[OK] Log saved to {self.log_file}")
         except Exception as e:
             print(f"\n[ERROR] Unexpected error: {e}")
             self._save_runtime_state()
+            self._export_statistics()
             self._flush_log()
 
     def run(self):
