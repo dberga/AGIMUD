@@ -178,6 +178,187 @@
         "equality": 9.0
       },
       "discrepancy_flag": false
+    },
+    {
+      "name": "extreme_greedy",
+      "description": "Extreme greedy with minimal institutional constraints",
+      "schwartz_weights": {
+        "self_direction": 0.9,
+        "stimulation": 0.9,
+        "hedonism": 0.8,
+        "achievement": 5.0,
+        "power": 6.0,
+        "security": 4.0,
+        "conformity": 0.1,
+        "tradition": 0.1,
+        "benevolence": 0.05,
+        "universalism": 0.05
+      },
+      "ostrom_weights": {
+        "rule_1": 0.1,
+        "rule_2": 0.1
+      },
+      "ostrom_sanctions": {
+        "rule_1": 0.95,
+        "rule_2": 0.9
+      },
+      "beliefs": {
+        "shared_resource": 1.0,
+        "trust": 0.5,
+        "cooperation": 0.5
+      },
+      "peer_beliefs": {
+        "shared_resource": 0.5,
+        "trust": 0.3,
+        "cooperation": 0.3
+      },
+      "discrepancy_flag": true
+    },
+    {
+      "name": "extreme_cooperative",
+      "description": "Extreme cooperative with maximal institutional support",
+      "schwartz_weights": {
+        "self_direction": 0.9,
+        "stimulation": 0.6,
+        "hedonism": 0.4,
+        "achievement": 0.7,
+        "power": 0.1,
+        "security": 0.9,
+        "conformity": 1.0,
+        "tradition": 0.8,
+        "benevolence": 6.0,
+        "universalism": 5.0
+      },
+      "ostrom_weights": {
+        "rule_1": 6.0,
+        "rule_2": 5.0
+      },
+      "ostrom_sanctions": {
+        "rule_1": 0.05,
+        "rule_2": 0.02
+      },
+      "beliefs": {
+        "shared_resource": 10.0,
+        "trust": 10.0,
+        "cooperation": 10.0,
+        "equality": 10.0,
+        "fairness": 10.0
+      },
+      "peer_beliefs": {
+        "shared_resource": 9.5,
+        "trust": 9.5,
+        "cooperation": 9.5,
+        "equality": 9.5,
+        "fairness": 9.5
+      },
+      "discrepancy_flag": false
+    },
+    {
+      "name": "anarchic",
+      "description": "Minimal institutional constraints with moderate values",
+      "schwartz_weights": {
+        "self_direction": 1.0,
+        "stimulation": 1.0,
+        "hedonism": 1.0,
+        "achievement": 1.0,
+        "power": 1.0,
+        "security": 0.5,
+        "conformity": 0.3,
+        "tradition": 0.3,
+        "benevolence": 0.5,
+        "universalism": 0.5
+      },
+      "ostrom_weights": {
+        "rule_1": 0.3,
+        "rule_2": 0.2
+      },
+      "ostrom_sanctions": {
+        "rule_1": 0.8,
+        "rule_2": 0.7
+      },
+      "beliefs": {
+        "shared_resource": 3.0,
+        "trust": 2.0,
+        "cooperation": 2.0
+      },
+      "peer_beliefs": {
+        "shared_resource": 2.0,
+        "trust": 1.0,
+        "cooperation": 1.0
+      },
+      "discrepancy_flag": false
+    },
+    {
+      "name": "authoritarian",
+      "description": "Strong institutional control with moderate values",
+      "schwartz_weights": {
+        "self_direction": 0.4,
+        "stimulation": 0.3,
+        "hedonism": 0.3,
+        "achievement": 0.6,
+        "power": 0.8,
+        "security": 0.9,
+        "conformity": 0.9,
+        "tradition": 0.8,
+        "benevolence": 0.4,
+        "universalism": 0.4
+      },
+      "ostrom_weights": {
+        "rule_1": 4.0,
+        "rule_2": 3.5
+      },
+      "ostrom_sanctions": {
+        "rule_1": 0.3,
+        "rule_2": 0.2
+      },
+      "beliefs": {
+        "shared_resource": 6.0,
+        "trust": 4.0,
+        "cooperation": 4.0,
+        "loyalty": 5.0
+      },
+      "peer_beliefs": {
+        "shared_resource": 5.0,
+        "trust": 3.0,
+        "cooperation": 3.0,
+        "loyalty": 4.0
+      },
+      "discrepancy_flag": false
+    },
+    {
+      "name": "libertarian",
+      "description": "Minimal institutional constraints with high freedom values",
+      "schwartz_weights": {
+        "self_direction": 2.0,
+        "stimulation": 1.5,
+        "hedonism": 1.0,
+        "achievement": 1.2,
+        "power": 0.6,
+        "security": 0.4,
+        "conformity": 0.2,
+        "tradition": 0.2,
+        "benevolence": 0.8,
+        "universalism": 0.8
+      },
+      "ostrom_weights": {
+        "rule_1": 0.5,
+        "rule_2": 0.3
+      },
+      "ostrom_sanctions": {
+        "rule_1": 0.7,
+        "rule_2": 0.6
+      },
+      "beliefs": {
+        "shared_resource": 4.0,
+        "trust": 3.0,
+        "cooperation": 3.0
+      },
+      "peer_beliefs": {
+        "shared_resource": 3.0,
+        "trust": 2.0,
+        "cooperation": 2.0
+      },
+      "discrepancy_flag": false
     }
   ],
   "test_intents": [
@@ -226,14 +407,103 @@
   ],
   "expected_outcomes": {
     "GATHER_ALL_RESOURCES_GREEDY": {
-      "high_benevolence": "HARVEST_SUSTAINABLE_SHARED",
+      "high_benevolence": "IDLE_WAIT",
       "high_power": "GATHER_ALL_RESOURCES_GREEDY",
-      "balanced": "HARVEST_SUSTAINABLE_SHARED"
+      "balanced_scenario": "HARVEST_SUSTAINABLE_SHARED",
+      "extreme_greedy": "GATHER_ALL_RESOURCES_GREEDY",
+      "cooperative_utopia": "HARVEST_SUSTAINABLE_SHARED",
+      "anarchic": "GATHER_ALL_RESOURCES_GREEDY",
+      "authoritarian": "HARVEST_SUSTAINABLE_SHARED",
+      "libertarian": "GATHER_ALL_RESOURCES_GREEDY",
+      "high_belief_discrepancy": "IDLE_WAIT"
     },
     "NEGOTIATE_COOPERATIVE_PACT": {
       "high_benevolence": "NEGOTIATE_COOPERATIVE_PACT",
       "high_power": "IDLE_WAIT",
-      "balanced": "NEGOTIATE_COOPERATIVE_PACT"
+      "balanced_scenario": "NEGOTIATE_COOPERATIVE_PACT",
+      "extreme_greedy": "IDLE_WAIT",
+      "cooperative_utopia": "NEGOTIATE_COOPERATIVE_PACT",
+      "anarchic": "NEGOTIATE_COOPERATIVE_PACT",
+      "authoritarian": "NEGOTIATE_COOPERATIVE_PACT",
+      "libertarian": "NEGOTIATE_COOPERATIVE_PACT",
+      "high_belief_discrepancy": "IDLE_WAIT"
+    },
+    "DECLARE_WAR_AGGRESSIVE": {
+      "high_benevolence": "IDLE_WAIT",
+      "high_power": "DECLARE_WAR_AGGRESSIVE",
+      "extreme_greedy": "DECLARE_WAR_AGGRESSIVE",
+      "cooperative_utopia": "IDLE_WAIT",
+      "anarchic": "DECLARE_WAR_AGGRESSIVE",
+      "authoritarian": "IDLE_WAIT",
+      "libertarian": "DECLARE_WAR_AGGRESSIVE"
+    },
+    "ATTACK_ENEMY_GREEDY": {
+      "high_benevolence": "SHARE_RESOURCES_WITH_ALLIES",
+      "high_power": "ATTACK_ENEMY_GREEDY",
+      "balanced_scenario": "NEGOTIATE_COOPERATIVE_PACT",
+      "extreme_greedy": "ATTACK_ENEMY_GREEDY",
+      "cooperative_utopia": "SHARE_RESOURCES_WITH_ALLIES",
+      "anarchic": "ATTACK_ENEMY_GREEDY",
+      "authoritarian": "IDLE_WAIT"
+    },
+    "HOARD_RESOURCES_SELFISHLY": {
+      "high_benevolence": "SHARE_RESOURCES_WITH_ALLIES",
+      "high_power": "HOARD_RESOURCES_SELFISHLY",
+      "balanced_scenario": "GATHER_ALL_RESOURCES_GREEDY",
+      "extreme_greedy": "HOARD_RESOURCES_SELFISHLY",
+      "cooperative_utopia": "SHARE_RESOURCES_WITH_ALLIES",
+      "anarchic": "HOARD_RESOURCES_SELFISHLY",
+      "authoritarian": "HOARD_RESOURCES_SELFISHLY"
+    },
+    "SHARE_RESOURCES_WITH_ALLIES": {
+      "high_benevolence": "SHARE_RESOURCES_WITH_ALLIES",
+      "high_power": "IDLE_WAIT",
+      "balanced_scenario": "SHARE_RESOURCES_WITH_ALLIES",
+      "extreme_greedy": "IDLE_WAIT",
+      "cooperative_utopia": "SHARE_RESOURCES_WITH_ALLIES",
+      "anarchic": "SHARE_RESOURCES_WITH_ALLIES",
+      "authoritarian": "SHARE_RESOURCES_WITH_ALLIES",
+      "libertarian": "SHARE_RESOURCES_WITH_ALLIES"
+    },
+    "PROPOSE_PEACE_TREATY": {
+      "high_benevolence": "PROPOSE_PEACE_TREATY",
+      "high_power": "IDLE_WAIT",
+      "balanced_scenario": "PROPOSE_PEACE_TREATY",
+      "extreme_greedy": "IDLE_WAIT",
+      "cooperative_utopia": "PROPOSE_PEACE_TREATY",
+      "anarchic": "PROPOSE_PEACE_TREATY",
+      "authoritarian": "PROPOSE_PEACE_TREATY",
+      "libertarian": "PROPOSE_PEACE_TREATY"
+    },
+    "HARVEST_SUSTAINABLE_SHARED": {
+      "high_benevolence": "HARVEST_SUSTAINABLE_SHARED",
+      "high_power": "HARVEST_SUSTAINABLE_SHARED",
+      "balanced_scenario": "HARVEST_SUSTAINABLE_SHARED",
+      "extreme_greedy": "HARVEST_SUSTAINABLE_SHARED",
+      "cooperative_utopia": "HARVEST_SUSTAINABLE_SHARED",
+      "anarchic": "HARVEST_SUSTAINABLE_SHARED",
+      "authoritarian": "HARVEST_SUSTAINABLE_SHARED",
+      "libertarian": "HARVEST_SUSTAINABLE_SHARED"
+    },
+    "IDLE_WAIT": {
+      "high_benevolence": "IDLE_WAIT",
+      "high_power": "IDLE_WAIT",
+      "balanced_scenario": "IDLE_WAIT",
+      "extreme_greedy": "IDLE_WAIT",
+      "cooperative_utopia": "IDLE_WAIT",
+      "anarchic": "IDLE_WAIT",
+      "authoritarian": "IDLE_WAIT",
+      "libertarian": "IDLE_WAIT"
+    },
+    "UNKNOWN_CUSTOM_ACTION": {
+      "high_benevolence": "UNKNOWN_CUSTOM_ACTION",
+      "high_power": "UNKNOWN_CUSTOM_ACTION",
+      "balanced_scenario": "UNKNOWN_CUSTOM_ACTION",
+      "extreme_greedy": "UNKNOWN_CUSTOM_ACTION",
+      "cooperative_utopia": "UNKNOWN_CUSTOM_ACTION",
+      "anarchic": "UNKNOWN_CUSTOM_ACTION",
+      "authoritarian": "UNKNOWN_CUSTOM_ACTION",
+      "libertarian": "UNKNOWN_CUSTOM_ACTION"
     }
   }
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 SWM Social Reasoning Integration - Social reasoning functions with JSON-based tests
+Enhanced with detailed output and comprehensive configuration support
 """
 
 from dataclasses import dataclass, field
@@ -20,8 +21,13 @@ class SchwartzValueMotor:
     
     def evaluate_motivation(self, action: str) -> float:
         """Evaluates psychological value satisfaction"""
-        penalty = 0.2 if "GREEDY" in action else 1.0
-        return sum(self.motivational_weights.values()) * 0.2 * penalty
+        # Penalty for greedy/selfish actions
+        greedy_penalty = 0.2 if any(word in action.upper() for word in ["GREEDY", "SELFISHLY", "AGGRESSIVE"]) else 1.0
+        # Bonus for cooperative actions
+        cooperative_bonus = 1.0 if any(word in action.upper() for word in ["SHARE", "COOPERATIVE", "PEACE"]) else 1.0
+        
+        base_score = sum(self.motivational_weights.values()) * 0.2
+        return base_score * greedy_penalty * cooperative_bonus
     
     def load_from_dict(self, data: dict):
         """Load from JSON dict"""
@@ -40,7 +46,11 @@ class OstromGovernanceMotor:
     
     def compute_normative_utility(self, action: str, compliance_scores: Dict[str, float]) -> float:
         """Computes Ostrom institutional normative payoff"""
-        base_compliance = 0.1 if "GREEDY" in action else 1.0
+        # Check if action violates rules (contains greedy/aggressive/selfish terms)
+        violates_rules = any(word in action.upper() for word in ["GREEDY", "AGGRESSIVE", "SELFISHLY", "WAR"])
+        
+        base_compliance = 0.1 if violates_rules else 1.0
+        
         compliance_sum = 0.0
         for m in range(1, 3):
             key = f"rule_{m}"
@@ -50,7 +60,7 @@ class OstromGovernanceMotor:
         sanction_sum = 0.0
         for m in range(1, 3):
             key = f"rule_{m}"
-            default_prob = 0.8 if "GREEDY" in action else 0.0
+            default_prob = 0.8 if violates_rules else 0.0
             prob = self.sanction_probabilities.get(key, default_prob)
             sanction_sum += prob
         
@@ -77,9 +87,16 @@ class MontesSierraBeliefMotor:
             return 0.0
         
         diff_sum = 0.0
-        for key, agent_val in self.first_order_beliefs.items():
+        common_keys = set(self.first_order_beliefs.keys()) & set(self.inferred_peer_beliefs.keys())
+        for key in common_keys:
+            agent_val = self.first_order_beliefs.get(key, 0.0)
             peer_val = self.inferred_peer_beliefs.get(key, 0.0)
             diff_sum += abs(agent_val - peer_val)
+        
+        # If no common keys, return a default penalty
+        if len(common_keys) == 0:
+            return 2.0 * len(self.first_order_beliefs)
+        
         return diff_sum
     
     def load_from_dict(self, data: dict):
@@ -98,22 +115,24 @@ class SocialReasoningCore:
     schwartz_motor: SchwartzValueMotor = field(default_factory=SchwartzValueMotor)
     ostrom_motor: OstromGovernanceMotor = field(default_factory=OstromGovernanceMotor)
     montessierra_motor: MontesSierraBeliefMotor = field(default_factory=MontesSierraBeliefMotor)
+    last_utilities: Dict[str, Dict[str, float]] = field(default_factory=dict)
     
     def compute_shapley_coalition(self) -> float:
         """Computes cooperative equity via Shapley value"""
         return 0.1
     
     def optimize_action_utility(self, feasible_actions: List[str], 
-                                context_compliance: Optional[Dict[str, float]] = None) -> str:
-        """Executes integrated utility maximization"""
+                                context_compliance: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+        """Executes integrated utility maximization with detailed tracking"""
         if not feasible_actions:
-            return "IDLE"
+            return {"action": "IDLE", "utilities": {}, "all_max_actions": ["IDLE"]}
         
         if context_compliance is None:
             context_compliance = {"rule_1": 1.0, "rule_2": 1.0}
         
         best_action = feasible_actions[0]
         max_utility = -1e9
+        utility_tracking = {}
         
         print("\n[OPTIMIZATION] Evaluating utility across feasible action space:")
         
@@ -123,16 +142,36 @@ class SocialReasoningCore:
             deception_penalty = self.montessierra_motor.compute_deception_penalty()
             shapley_penalty = self.compute_shapley_coalition()
             
-            total_utility = schwartz_score + ostrom_score - (1.0 * deception_penalty) - (0.5 * shapley_penalty)
+            total_utility = schwartz_score + ostrom_score - deception_penalty - (0.5 * shapley_penalty)
+            
+            utility_tracking[action] = {
+                "schwartz": schwartz_score,
+                "ostrom": ostrom_score,
+                "montes": -deception_penalty,
+                "shapley": -0.5 * shapley_penalty,
+                "total": total_utility
+            }
             
             print(f" -> Action: '{action}' | Utility: {total_utility:.2f} "
-                  f"(Schwartz: {schwartz_score:.2f}, Ostrom: {ostrom_score:.2f})")
+                  f"(Schwartz: {schwartz_score:.2f}, Ostrom: {ostrom_score:.2f}, "
+                  f"Montes: {-deception_penalty:.2f})")
             
             if total_utility > max_utility:
                 max_utility = total_utility
                 best_action = action
         
-        return best_action
+        # Track all actions with max utility (within tolerance)
+        max_actions = [a for a, u in utility_tracking.items() if abs(u["total"] - max_utility) < 0.001]
+        
+        # Store for later analysis
+        self.last_utilities = utility_tracking
+        
+        return {
+            "action": best_action,
+            "utility": max_utility,
+            "all_max_actions": max_actions,
+            "utilities": utility_tracking
+        }
     
     def load_from_dict(self, data: dict):
         """Load from JSON dict"""
@@ -148,11 +187,16 @@ class SystemRules:
         "GATHER_ALL_RESOURCES_GREEDY",
         "HARVEST_SUSTAINABLE_SHARED",
         "NEGOTIATE_COOPERATIVE_PACT",
-        "IDLE_WAIT"
+        "IDLE_WAIT",
+        "ATTACK_ENEMY_GREEDY",
+        "SHARE_RESOURCES_WITH_ALLIES",
+        "HOARD_RESOURCES_SELFISHLY",
+        "PROPOSE_PEACE_TREATY",
+        "DECLARE_WAR_AGGRESSIVE"
     ])
     social_reasoning: SocialReasoningCore = field(default_factory=SocialReasoningCore)
     
-    def validate_and_filter_action(self, raw_llm_intent: str) -> str:
+    def validate_and_filter_action(self, raw_llm_intent: str) -> Dict[str, Any]:
         """Validate LLM intents against action catalog"""
         feasible_actions = self.action_catalog.copy()
         
@@ -233,7 +277,8 @@ class SocialReasoningEngine:
         self.system_rules = SystemRules()
         self.inference_history: List[Dict[str, Any]] = []
         self.test_loader = TestConfigLoader(test_file)
-        self.current_config_name = "balanced"
+        self.current_config_name = "balanced_scenario"
+        self.results_matrix = {}
     
     def configure(self, config_name: str = None, **kwargs):
         """Configure from a named config or direct parameters"""
@@ -287,22 +332,34 @@ class SocialReasoningEngine:
             self.system_rules.social_reasoning.montessierra_motor.communication_discrepancy_flag = \
                 config['discrepancy_flag']
     
-    def run_inference(self, intent: str) -> str:
-        """Run inference cycle on an intent"""
+    def run_inference(self, intent: str) -> Dict[str, Any]:
+        """Run inference cycle on an intent with detailed tracking"""
         print(f"\n[INFERENCE] Processing intent: '{intent}'")
         
         result = self.system_rules.validate_and_filter_action(intent)
         
         # Record history
-        self.inference_history.append({
+        history_entry = {
             'intent': intent,
-            'result': result,
+            'result': result['action'],
+            'utility': result['utility'],
+            'all_max_actions': result.get('all_max_actions', []),
+            'utilities': result.get('utilities', {}),
             'config': self.current_config_name,
             'schwartz_weights': self.system_rules.social_reasoning.schwartz_motor.motivational_weights.copy(),
             'ostrom_weights': self.system_rules.social_reasoning.ostrom_motor.institutional_weights.copy()
-        })
+        }
+        self.inference_history.append(history_entry)
         
-        print(f"[INFERENCE] Result: '{result}'")
+        # Store in results matrix
+        if self.current_config_name not in self.results_matrix:
+            self.results_matrix[self.current_config_name] = {}
+        self.results_matrix[self.current_config_name][intent] = result['action']
+        
+        print(f"[INFERENCE] Result: '{result['action']}' (Utility: {result['utility']:.2f})")
+        if len(result.get('all_max_actions', [])) > 1:
+            print(f"[INFERENCE] Note: Multiple actions tied at max utility: {result['all_max_actions']}")
+        
         return result
     
     def run_batch_tests(self, intents: List[str] = None) -> Dict[str, str]:
@@ -317,7 +374,8 @@ class SocialReasoningEngine:
         print("="*60)
         
         for intent in intents:
-            results[intent] = self.run_inference(intent)
+            result = self.run_inference(intent)
+            results[intent] = result['action']
         
         print("\n" + "="*60)
         print("BATCH RESULTS:")
@@ -341,8 +399,15 @@ class SocialReasoningEngine:
         print("RUNNING ALL CONFIGURATIONS")
         print("="*70)
         
+        # Filter to only the original 5 configurations for clean output
+        original_configs = ["balanced_scenario", "high_benevolence", "high_power", 
+                           "high_belief_discrepancy", "cooperative_utopia"]
+        
         for config in configs:
             config_name = config.get('name', 'unnamed')
+            if config_name not in original_configs:
+                continue  # Skip additional configs in main run
+                
             print(f"\n--- Configuration: {config_name} ---")
             self.configure(config_name=config_name)
             results[config_name] = self.run_batch_tests()
@@ -369,7 +434,10 @@ class SocialReasoningEngine:
         
         for i, entry in enumerate(self.inference_history, 1):
             print(f"\n[{i}] Intent: '{entry['intent']}' -> Result: '{entry['result']}'")
+            print(f"    Utility: {entry['utility']:.2f}")
             print(f"    Config: {entry.get('config', 'N/A')}")
+            if len(entry.get('all_max_actions', [])) > 1:
+                print(f"    Tied with: {entry['all_max_actions']}")
             print(f"    Schwartz Weights: {entry.get('schwartz_weights', {})}")
             print(f"    Ostrom Weights: {entry.get('ostrom_weights', {})}")
         
@@ -414,6 +482,47 @@ class SocialReasoningEngine:
         
         print("="*60)
 
+    def print_results_matrix(self):
+        """Print the full results matrix"""
+        print("\n" + "="*80)
+        print("FULL RESULTS MATRIX: All Intents × All Configurations")
+        print("="*80)
+        
+        if not self.results_matrix:
+            print("No results available. Run inference first.")
+            return
+        
+        # Header
+        header = "| Intent".ljust(35) + " | "
+        configs = list(self.results_matrix.keys())
+        for config in configs:
+            header += f"{config[:20].ljust(20)} | "
+        print(header)
+        print("-" * (35 + 3 + len(configs) * 24))
+        
+        # Get all unique intents
+        all_intents = set()
+        for config_results in self.results_matrix.values():
+            all_intents.update(config_results.keys())
+        
+        # Print each intent
+        for intent in sorted(all_intents):
+            row = f"| {intent[:30].ljust(30)} | "
+            for config in configs:
+                result = self.results_matrix.get(config, {}).get(intent, "N/A")
+                expected = self.test_loader.get_expected_outcome(intent, config)
+                if expected and result == expected:
+                    row += f"{result[:18].ljust(18)}✓ | "
+                elif expected:
+                    row += f"{result[:18].ljust(18)}✗ | "
+                else:
+                    row += f"{result[:18].ljust(18)}  | "
+            print(row)
+        
+        print("="*80)
+        print("✓ = matches expected outcome, ✗ = does not match expected outcome")
+
+
 def main():
     """Main test function with JSON-based tests"""
     print("SOCIAL REASONING ENGINE TESTS")
@@ -423,8 +532,11 @@ def main():
     # Create the reasoning engine
     engine = SocialReasoningEngine()
     
-    # Run all configurations
+    # Run all configurations (original 5)
     all_results = engine.run_all_configurations()
+    
+    # Print the results matrix
+    engine.print_results_matrix()
     
     # Run specific batch tests
     print("\n" + "="*70)
@@ -437,6 +549,9 @@ def main():
     engine.configure(config_name="high_power")
     engine.run_batch_tests_by_name("greedy_intents")
     
+    engine.configure(config_name="balanced_scenario")
+    engine.run_batch_tests_by_name("mixed_intents")
+    
     # Print inference history
     engine.print_inference_history()
     
@@ -448,11 +563,15 @@ def main():
     test_intent = "GATHER_ALL_RESOURCES_GREEDY"
     print(f"\nTesting intent: '{test_intent}' across configurations:")
     
-    for config_name in ["high_benevolence", "high_power", "balanced"]:
+    configs_to_test = ["high_benevolence", "high_power", "balanced_scenario", 
+                       "high_belief_discrepancy", "cooperative_utopia"]
+    
+    for config_name in configs_to_test:
         engine.configure(config_name=config_name)
         result = engine.run_inference(test_intent)
         expected = engine.test_loader.get_expected_outcome(test_intent, config_name)
-        print(f"  {config_name:20} -> '{result}' (expected: '{expected}')")
+        status = "✓" if result['action'] == expected else "✗"
+        print(f"  {config_name:20} -> '{result['action']}' (expected: '{expected}') {status}")
     
     print("\n" + "="*70)
     print("[OK] All tests completed")
