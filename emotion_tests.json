@@ -1,0 +1,154 @@
+{
+  "test_configurations": [
+    {
+      "name": "default",
+      "description": "Default emotion configuration",
+      "ekman_emotions": ["anger", "fear", "disgust", "sadness", "joy", "surprise"],
+      "emotion_appraisal_map": {
+        "goal_blocked": "anger",
+        "threat_detected": "fear",
+        "contamination_detected": "disgust",
+        "loss_experienced": "sadness",
+        "goal_achieved": "joy",
+        "novelty_detected": "surprise"
+      },
+      "event_base_intensities": {
+        "goal_blocked": 0.65,
+        "threat_detected": 0.70,
+        "contamination_detected": 0.55,
+        "loss_experienced": 0.60,
+        "goal_achieved": 0.75,
+        "novelty_detected": 0.50
+      },
+      "global_intensity_multiplier": 1.0,
+      "emotion_intensity_adjustments": {
+        "health_low": 0.2,
+        "stamina_low": 0.1,
+        "health_high": 0.1,
+        "stamina_high": 0.1
+      },
+      "emotion_appraisals": {
+        "anger": {"to_state": "combat", "priority": 5, "arousal": "high"},
+        "fear": {"to_state": "flee", "priority": 4, "arousal": "high"},
+        "disgust": {"to_state": "flee", "priority": 3, "arousal": "medium"},
+        "sadness": {"to_state": "rest", "priority": 2, "arousal": "low"},
+        "joy": {"to_state": "socialize", "priority": 4, "arousal": "high"},
+        "surprise": {"to_state": "explore", "priority": 3, "arousal": "medium"}
+      }
+    },
+    {
+      "name": "high_reactivity",
+      "description": "High emotional reactivity configuration",
+      "ekman_emotions": ["anger", "fear", "disgust", "sadness", "joy", "surprise"],
+      "emotion_appraisal_map": {
+        "goal_blocked": "anger",
+        "threat_detected": "fear",
+        "contamination_detected": "disgust",
+        "loss_experienced": "sadness",
+        "goal_achieved": "joy",
+        "novelty_detected": "surprise"
+      },
+      "event_base_intensities": {
+        "goal_blocked": 0.75,
+        "threat_detected": 0.80,
+        "contamination_detected": 0.65,
+        "loss_experienced": 0.70,
+        "goal_achieved": 0.85,
+        "novelty_detected": 0.60
+      },
+      "global_intensity_multiplier": 1.3,
+      "emotion_intensity_adjustments": {
+        "health_low": 0.4,
+        "stamina_low": 0.3,
+        "health_high": 0.2,
+        "stamina_high": 0.2
+      },
+      "emotion_appraisals": {
+        "anger": {"to_state": "combat", "priority": 6, "arousal": "high"},
+        "fear": {"to_state": "flee", "priority": 5, "arousal": "high"},
+        "disgust": {"to_state": "flee", "priority": 4, "arousal": "high"},
+        "sadness": {"to_state": "rest", "priority": 3, "arousal": "medium"},
+        "joy": {"to_state": "socialize", "priority": 5, "arousal": "high"},
+        "surprise": {"to_state": "explore", "priority": 4, "arousal": "high"}
+      }
+    },
+    {
+      "name": "low_reactivity",
+      "description": "Low emotional reactivity configuration",
+      "ekman_emotions": ["anger", "fear", "disgust", "sadness", "joy", "surprise"],
+      "emotion_appraisal_map": {
+        "goal_blocked": "anger",
+        "threat_detected": "fear",
+        "contamination_detected": "disgust",
+        "loss_experienced": "sadness",
+        "goal_achieved": "joy",
+        "novelty_detected": "surprise"
+      },
+      "event_base_intensities": {
+        "goal_blocked": 0.45,
+        "threat_detected": 0.50,
+        "contamination_detected": 0.40,
+        "loss_experienced": 0.40,
+        "goal_achieved": 0.55,
+        "novelty_detected": 0.35
+      },
+      "global_intensity_multiplier": 0.7,
+      "emotion_intensity_adjustments": {
+        "health_low": 0.05,
+        "stamina_low": 0.05,
+        "health_high": 0.05,
+        "stamina_high": 0.05
+      },
+      "emotion_appraisals": {
+        "anger": {"to_state": "idle", "priority": 3, "arousal": "medium"},
+        "fear": {"to_state": "idle", "priority": 2, "arousal": "medium"},
+        "disgust": {"to_state": "idle", "priority": 2, "arousal": "low"},
+        "sadness": {"to_state": "idle", "priority": 1, "arousal": "low"},
+        "joy": {"to_state": "idle", "priority": 3, "arousal": "medium"},
+        "surprise": {"to_state": "idle", "priority": 2, "arousal": "medium"}
+      }
+    }
+  ],
+  "test_events": [
+    "goal_blocked",
+    "threat_detected",
+    "contamination_detected",
+    "loss_experienced",
+    "goal_achieved",
+    "novelty_detected"
+  ],
+  "status_test_cases": [
+    {"label": "high_health_high_stamina", "health": 100, "stamina": 100},
+    {"label": "low_health_low_stamina", "health": 20, "stamina": 20},
+    {"label": "low_health_high_stamina", "health": 20, "stamina": 80},
+    {"label": "high_health_low_stamina", "health": 80, "stamina": 20},
+    {"label": "balanced", "health": 50, "stamina": 50}
+  ],
+  "memory_sequence": [
+    "goal_blocked",
+    "goal_achieved",
+    "threat_detected",
+    "loss_experienced",
+    "goal_achieved",
+    "novelty_detected"
+  ],
+  "emotion_sequence": [
+    {"event": "goal_blocked", "step": 1},
+    {"event": "goal_achieved", "step": 2},
+    {"event": "threat_detected", "step": 3},
+    {"event": "goal_blocked", "step": 4},
+    {"event": "novelty_detected", "step": 5},
+    {"event": "goal_achieved", "step": 6},
+    {"event": "loss_experienced", "step": 7}
+  ],
+  "expected_outcomes": {
+    "appraisal": {
+      "goal_blocked": "anger",
+      "threat_detected": "fear",
+      "contamination_detected": "disgust",
+      "loss_experienced": "sadness",
+      "goal_achieved": "joy",
+      "novelty_detected": "surprise"
+    }
+  }
+}
