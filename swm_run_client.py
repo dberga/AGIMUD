@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 SWM Run Client - Centralized client with clean atomic epoch rendering and all imports
+Supports all commands from swm_run.py
 """
 
 import json
@@ -9,6 +10,8 @@ import time
 import socket
 import sys
 import argparse
+import threading
+import select
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
@@ -38,7 +41,7 @@ class NetworkMessage:
 
 
 class SWMClient:
-    """Centralized client for SWM with atomic epoch output"""
+    """Centralized client for SWM with atomic epoch output and command support"""
     
     def __init__(self, config_file: str = "network_client_config.json"):
         self.config = self._load_config(config_file)
@@ -50,6 +53,14 @@ class SWMClient:
         self.characters = []
         self.last_events = []
         self.server_epoch = 0
+        self.server_mode = "auto"
+        self.command_queue = []
+        self.input_thread = None
+        self.waiting_for_response = False
+        self.pause_mode = False
+        self.last_render_time = 0
+        self.prompt = "[CLIENT] > "
+        self.show_prompt = True  # Control when to show prompt
         
         client_cfg = self.config.get('client', {})
         self.client_id = client_cfg.get('id', 'client_001')
@@ -152,11 +163,30 @@ class SWMClient:
             self.connected = False
             return None
     
-    def _render(self):
-        """Render client dashboard atomically without clearing screen to prevent gaps"""
+    def _render(self, force: bool = False):
+        """Render client dashboard"""
+        # Skip rendering in pause mode (except for force)
+        if self.pause_mode and not force:
+            # Minimal status update every 15 seconds
+            current_time = time.time()
+            if current_time - self.last_render_time < 15:
+                return
+            self.last_render_time = current_time
+            # Show status without disturbing the input line
+            sys.stdout.write(f"\r[CLIENT] PAUSE MODE | Epoch: {self.server_epoch} | Connected: {self.connected} | Press Enter to resume    \n")
+            if self.show_prompt:
+                sys.stdout.write(self.prompt)
+                sys.stdout.flush()
+            return
+        
+        # Clear the current line properly
+        sys.stdout.write("\r" + " " * 100 + "\r")
+        
         output = []
-        output.append("\n" + "="*80)
-        output.append(f"SIMULATED WORLD CLIENT - EPOCH {self.server_epoch} | Dashboard: {self.client_id} | Connected: {self.connected}")
+        output.append("="*80)
+        output.append(f"SWM CLIENT - EPOCH {self.server_epoch} | {self.client_id} | Mode: {self.server_mode.upper()} | Connected: {self.connected}")
+        if self.pause_mode:
+            output.append("*** PAUSE MODE ACTIVE - Updates paused ***")
         output.append("="*80)
         
         global_states = self.world_state.get('global_states', {})
@@ -173,7 +203,7 @@ class SWMClient:
         
         if self.characters:
             output.append(f"\n[CHARACTERS] ({len(self.characters)})")
-            for char in self.characters:
+            for char in self.characters[:10]:
                 name = char.get('name', 'Unknown') if isinstance(char, dict) else 'Unknown'
                 ai_state = char.get('ai_state', 'IDLE') if isinstance(char, dict) else 'IDLE'
                 goal = char.get('goal', 'social_belonging') if isinstance(char, dict) else 'social_belonging'
@@ -185,20 +215,31 @@ class SWMClient:
                 location = nav.get('current_location', 'Unknown')
                 
                 output.append(f"  * {name} [{ai_state}] | Goal: {goal} | Emotion: {emotion} | HP:{health} | ST:{stamina} @ {location}")
+            if len(self.characters) > 10:
+                output.append(f"  ... and {len(self.characters) - 10} more")
         
         if self.last_events:
             output.append(f"\n[RECENT EVENTS]")
-            for event in self.last_events:
+            for event in self.last_events[-5:]:
                 tick = event.get('tick', '?')
                 text = event.get('text', '')
                 output.append(f"  [{tick}] {text}")
         
         output.append("\n" + "="*80)
-        output.append("Press Ctrl+C to disconnect")
+        if self.pause_mode:
+            output.append("Press Enter to resume updates | Commands: help, summary, catalog, var, list, action, set, save, mode, q")
+        else:
+            output.append("Press Enter to pause updates | Commands: help, summary, catalog, var, list, action, set, save, mode, q")
         
-        full_render_string = "\n".join(output)
-        print(full_render_string)
+        # Print all lines
+        print("\n".join(output))
         sys.stdout.flush()
+        self.last_render_time = time.time()
+        
+        # Show prompt after rendering
+        if self.show_prompt:
+            sys.stdout.write(self.prompt)
+            sys.stdout.flush()
     
     def _handle_message(self, msg: NetworkMessage):
         msg_type = msg.type
@@ -209,13 +250,177 @@ class SWMClient:
             self.server_epoch = msg.payload.get('tick', msg.payload.get('global_tick', msg.payload.get('epoch', self.server_epoch)))
             if 'events' in msg.payload:
                 self.last_events = msg.payload.get('events', [])
+            if 'mode' in msg.payload:
+                self.server_mode = msg.payload.get('mode', self.server_mode)
+            self.waiting_for_response = False
             self._render()
             
         elif msg_type == "PONG":
             pass
             
         elif msg_type == "ERROR":
-            print(f"[CLIENT] Server error: {msg.payload.get('message')}")
+            self.waiting_for_response = False
+            print(f"\n[CLIENT] Server error: {msg.payload.get('message')}")
+            if self.show_prompt:
+                sys.stdout.write(self.prompt)
+                sys.stdout.flush()
+        
+        elif msg_type == "COMMAND_RESULT":
+            self.waiting_for_response = False
+            cmd = msg.payload.get('command', '')
+            result = msg.payload.get('result', '')
+            print(f"\n[CLIENT] Result for '{cmd}':\n{result}")
+            if self.show_prompt:
+                sys.stdout.write(self.prompt)
+                sys.stdout.flush()
+    
+    def _input_listener(self):
+        """Listen for client input"""
+        cmd_buffer = ""
+        while self.running:
+            try:
+                if sys.platform == 'win32':
+                    import msvcrt
+                    if msvcrt.kbhit():
+                        char = msvcrt.getch()
+                        if char == b'\r':  # Enter
+                            print()  # New line
+                            
+                            # Hide prompt while processing
+                            self.show_prompt = False
+                            
+                            if not cmd_buffer.strip():
+                                # Toggle pause mode
+                                self.pause_mode = not self.pause_mode
+                                if self.pause_mode:
+                                    print("[CLIENT] PAUSE MODE enabled. Updates paused. Press Enter to resume.")
+                                else:
+                                    print("[CLIENT] LIVE MODE enabled. Showing updates.")
+                                    self._render(force=True)
+                            else:
+                                self.command_queue.append(cmd_buffer.strip())
+                            
+                            cmd_buffer = ""
+                            # Show prompt again
+                            self.show_prompt = True
+                            if self.running:
+                                sys.stdout.write(self.prompt)
+                                sys.stdout.flush()
+                        elif char == b'\x08':  # Backspace
+                            if cmd_buffer:
+                                cmd_buffer = cmd_buffer[:-1]
+                                # Handle backspace display
+                                sys.stdout.write('\b \b')
+                                sys.stdout.flush()
+                        else:
+                            try:
+                                decoded = char.decode('utf-8')
+                                if decoded.isprintable():
+                                    cmd_buffer += decoded
+                                    sys.stdout.write(decoded)
+                                    sys.stdout.flush()
+                            except UnicodeDecodeError:
+                                pass
+                else:
+                    if select.select([sys.stdin], [], [], 0.1)[0]:
+                        char = sys.stdin.read(1)
+                        if char == '\n' or char == '\r':
+                            print()  # New line
+                            
+                            self.show_prompt = False
+                            
+                            if not cmd_buffer.strip():
+                                self.pause_mode = not self.pause_mode
+                                if self.pause_mode:
+                                    print("[CLIENT] PAUSE MODE enabled. Updates paused. Press Enter to resume.")
+                                else:
+                                    print("[CLIENT] LIVE MODE enabled. Showing updates.")
+                                    self._render(force=True)
+                            else:
+                                self.command_queue.append(cmd_buffer.strip())
+                            
+                            cmd_buffer = ""
+                            self.show_prompt = True
+                            if self.running:
+                                sys.stdout.write(self.prompt)
+                                sys.stdout.flush()
+                        elif char == '\x7f' or char == '\x08':
+                            if cmd_buffer:
+                                cmd_buffer = cmd_buffer[:-1]
+                                sys.stdout.write('\b \b')
+                                sys.stdout.flush()
+                        elif char.isprintable():
+                            cmd_buffer += char
+                            sys.stdout.write(char)
+                            sys.stdout.flush()
+                time.sleep(0.01)
+            except:
+                time.sleep(0.1)
+    
+    def _process_command(self, cmd: str) -> bool:
+        """Process a client command locally or send to server"""
+        cmd = cmd.strip().lower()
+        
+        if not cmd:
+            return False
+        
+        parts = cmd.split()
+        command = parts[0].lower()
+        
+        # Local commands
+        if command in ['q', 'quit', 'exit']:
+            print("\n[CLIENT] Disconnecting...")
+            self.running = False
+            return True
+        
+        if command == 'help':
+            print("\n" + "="*60)
+            print("CLIENT COMMANDS")
+            print("="*60)
+            print("  [Enter]              - Toggle PAUSE/LIVE mode")
+            print("  help                 - Show this help menu")
+            print("  summary              - Request world summary from server")
+            print("  catalog              - List all available actions in catalog")
+            print("  var                  - List all available variables")
+            print("  list                 - List all characters, states, and HP")
+            print("  action <Name> <ACTION> - Force character action intent")
+            print("  set char <Name> <var> <val> - Modify character status variable")
+            print("  set world <key> <val> - Modify global world state")
+            print("  save                 - Save current world state on server")
+            print("  mode                 - Show current server mode")
+            print("  resume               - Resume updates (exit pause mode)")
+            print("  q / quit / exit      - Disconnect and exit")
+            print("="*60)
+            return False
+        
+        if command == 'mode':
+            print(f"\n[SERVER MODE] {self.server_mode.upper()}")
+            return False
+        
+        if command == 'resume':
+            if self.pause_mode:
+                self.pause_mode = False
+                print("[CLIENT] LIVE MODE enabled. Showing updates.")
+                self._render(force=True)
+            else:
+                print("[CLIENT] Already in LIVE mode.")
+            return False
+        
+        # Commands sent to server
+        if self.connected:
+            self._send_command(cmd)
+            print(f"[CLIENT] Sent command to server: {cmd}")
+        else:
+            print("[CLIENT] Not connected to server.")
+        
+        return False
+    
+    def _send_command(self, command: str):
+        """Send a command to the server"""
+        msg = NetworkMessage("COMMAND", {
+            "command": command
+        })
+        self._send(msg)
     
     def run(self):
         if not self.connect():
@@ -224,12 +429,31 @@ class SWMClient:
         self.running = True
         self.send_hello()
         
-        print("[CLIENT] Connected! Press Ctrl+C to disconnect\n")
+        # Start input listener thread
+        self.input_thread = threading.Thread(target=self._input_listener, daemon=True)
+        self.input_thread.start()
+        
+        print("[CLIENT] Connected! Type 'help' for commands, 'q' to quit")
+        print("[CLIENT] Press Enter to toggle PAUSE/LIVE mode (pause/resume updates)")
+        sys.stdout.write(self.prompt)
+        sys.stdout.flush()
         
         try:
             while self.running:
+                # Process commands from input thread
+                while self.command_queue:
+                    cmd = self.command_queue.pop(0)
+                    # Hide prompt while processing command
+                    self.show_prompt = False
+                    if self._process_command(cmd):
+                        return
+                    self.show_prompt = True
+                    if self.running:
+                        sys.stdout.write(self.prompt)
+                        sys.stdout.flush()
+                
                 if not self.connected:
-                    print("[CLIENT] Disconnected from server. Attempting to reconnect...")
+                    print("\n[CLIENT] Disconnected from server. Attempting to reconnect...")
                     if self.connect():
                         self.send_hello()
                 
@@ -237,12 +461,14 @@ class SWMClient:
                 if messages:
                     for msg in messages:
                         self._handle_message(msg)
+                    # Don't show prompt here, it's shown by _render or _handle_message
                 
-                time.sleep(0.1)
+                time.sleep(0.05)
                 
         except KeyboardInterrupt:
             print("\n[CLIENT] Disconnecting...")
         finally:
+            self.running = False
             if self.socket:
                 self.socket.close()
             print("[CLIENT] Disconnected")
