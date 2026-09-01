@@ -134,6 +134,9 @@ class SWMP2PNode:
         world_cfg = self.config.get('world', {'world_folder': 'world_p2p', 'sync_interval': 2.0, 'broadcast_interval': 1})
         node_cfg = self.config.get('node', {'id': 'node_001', 'host': '127.0.0.1', 'port': 6000})
         conn_cfg = self.config.get('connection', {'timeout': 5})
+        user_cfg = self.config.get('user', {'name': f'P2P_{self.role}'})
+        
+        self.user_name = user_cfg.get('name', f'P2P_{self.role}')
         
         self.sync_interval = world_cfg.get('sync_interval', 2.0)
         self.broadcast_interval = world_cfg.get('broadcast_interval', 1)
@@ -265,7 +268,39 @@ class SWMP2PNode:
             world_folder=self.world_folder
         )
         return True
-    
+        
+    def _broadcast_chat(self, sender: str, message: str):
+        """Broadcast a chat message to all peers"""
+        # Si el sender es el node_id, usar el nombre de usuario
+        if sender == self.node_id:
+            sender = self.user_name
+        
+        chat_msg = NetworkMessage("CHAT", {
+            "sender": sender,
+            "message": message,
+            "timestamp": datetime.now().isoformat()
+        }, sender=self.node_id)
+        
+        print(f"\n[CHAT] {sender}: {message}")
+        self._log(f"[CHAT] {sender}: {message}")
+        
+        for peer_id, peer_info in self.peers.items():
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(self.timeout)
+                sock.connect((peer_info['host'], peer_info['port']))
+                sock.sendall((chat_msg.to_json() + '\n').encode('utf-8'))
+                sock.close()
+            except Exception as e:
+                pass
+
+    def _handle_chat_message(self, sender: str, message: str):
+        """Handle incoming chat message"""
+        print(f"\n[CHAT] {sender}: {message}")
+        if self.show_prompt:
+            sys.stdout.write(self.prompt)
+            sys.stdout.flush()
+            
     def register_with_signaling(self, silent: bool = False):
         try:
             sig_cfg = self.config.get('signaling_server', {'host': '127.0.0.1', 'port': 7000})
@@ -511,7 +546,15 @@ class SWMP2PNode:
             print("  q / quit / exit      - Save and exit")
             print("="*60)
             return False
-        
+            
+        if command == 'chat':
+            if len(parts) < 2:
+                print("[ERROR] Usage: chat <message>")
+                return False
+            message = ' '.join(parts[1:])
+            self._broadcast_chat(self.node_id, message)
+            return False
+            
         # Mode
         if command == 'mode':
             print(f"\n[CURRENT MODE] {self.role.upper()}")
@@ -779,6 +822,23 @@ class SWMP2PNode:
                 self._render()
                 return True
         
+        elif msg_type == "CHAT":
+            sender = msg.payload.get('sender', msg.sender or 'Unknown')
+            message = msg.payload.get('message', '')
+            self._handle_chat_message(sender, message)
+            # Re-broadcast to other peers (flooding)
+            for peer_id, peer_info in self.peers.items():
+                if peer_id != msg.sender:
+                    try:
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.settimeout(self.timeout)
+                        sock.connect((peer_info['host'], peer_info['port']))
+                        sock.sendall((msg.to_json() + '\n').encode('utf-8'))
+                        sock.close()
+                    except:
+                        pass
+            return True
+            
         return False
     
     def _input_listener(self):

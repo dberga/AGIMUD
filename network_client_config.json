@@ -7,7 +7,7 @@
     "server_port": 5000
   },
   "user": {
-    "name": "Player",
+    "name": "Player_001",
     "initial_scene": "Castle",
     "position": {"x": 0, "y": 0}
   },

@@ -60,14 +60,18 @@ class SWMClient:
         self.pause_mode = False
         self.last_render_time = 0
         self.prompt = "[CLIENT] > "
-        self.show_prompt = True  # Control when to show prompt
+        self.show_prompt = True
         
         client_cfg = self.config.get('client', {})
         self.client_id = client_cfg.get('id', 'client_001')
         self.server_host = client_cfg.get('server_host', '127.0.0.1')
         self.server_port = client_cfg.get('server_port', 5000)
         
-        print(f"[CLIENT] Initialized as {self.client_id}")
+        # Get user name from config
+        user_cfg = self.config.get('user', {})
+        self.user_name = user_cfg.get('name', self.client_id)
+        
+        print(f"[CLIENT] Initialized as {self.client_id} ({self.user_name})")
         print(f"[CLIENT] Server at {self.server_host}:{self.server_port}")
     
     def _load_config(self, config_file: str) -> Dict[str, Any]:
@@ -113,15 +117,14 @@ class SWMClient:
         return False
     
     def send_hello(self):
-        user_cfg = self.config.get('user', {})
         sec_cfg = self.config.get('security', {})
         msg = NetworkMessage("HELLO", {
             "client_id": self.client_id,
-            "user_name": user_cfg.get('name', 'Player'),
+            "user_name": self.user_name,
             "api_key": sec_cfg.get('api_key', '')
         })
         self._send(msg)
-        print("[CLIENT] Sent HELLO to server")
+        print(f"[CLIENT] Sent HELLO to server as {self.user_name}")
     
     def _send(self, msg: NetworkMessage):
         if self.socket and self.connected:
@@ -165,26 +168,22 @@ class SWMClient:
     
     def _render(self, force: bool = False):
         """Render client dashboard"""
-        # Skip rendering in pause mode (except for force)
         if self.pause_mode and not force:
-            # Minimal status update every 15 seconds
             current_time = time.time()
             if current_time - self.last_render_time < 15:
                 return
             self.last_render_time = current_time
-            # Show status without disturbing the input line
             sys.stdout.write(f"\r[CLIENT] PAUSE MODE | Epoch: {self.server_epoch} | Connected: {self.connected} | Press Enter to resume    \n")
             if self.show_prompt:
                 sys.stdout.write(self.prompt)
                 sys.stdout.flush()
             return
         
-        # Clear the current line properly
         sys.stdout.write("\r" + " " * 100 + "\r")
         
         output = []
         output.append("="*80)
-        output.append(f"SWM CLIENT - EPOCH {self.server_epoch} | {self.client_id} | Mode: {self.server_mode.upper()} | Connected: {self.connected}")
+        output.append(f"SWM CLIENT - EPOCH {self.server_epoch} | {self.user_name} ({self.client_id}) | Mode: {self.server_mode.upper()} | Connected: {self.connected}")
         if self.pause_mode:
             output.append("*** PAUSE MODE ACTIVE - Updates paused ***")
         output.append("="*80)
@@ -227,16 +226,21 @@ class SWMClient:
         
         output.append("\n" + "="*80)
         if self.pause_mode:
-            output.append("Press Enter to resume updates | Commands: help, summary, catalog, var, list, action, set, save, mode, q")
+            output.append("Press Enter to resume updates | Commands: help, summary, catalog, var, list, action, set, save, mode, chat, q")
         else:
-            output.append("Press Enter to pause updates | Commands: help, summary, catalog, var, list, action, set, save, mode, q")
+            output.append("Press Enter to pause updates | Commands: help, summary, catalog, var, list, action, set, save, mode, chat, q")
         
-        # Print all lines
         print("\n".join(output))
         sys.stdout.flush()
         self.last_render_time = time.time()
         
-        # Show prompt after rendering
+        if self.show_prompt:
+            sys.stdout.write(self.prompt)
+            sys.stdout.flush()
+    
+    def _handle_chat_message(self, sender: str, message: str):
+        """Handle incoming chat message"""
+        print(f"\n[CHAT] {sender}: {message}")
         if self.show_prompt:
             sys.stdout.write(self.prompt)
             sys.stdout.flush()
@@ -273,6 +277,19 @@ class SWMClient:
             if self.show_prompt:
                 sys.stdout.write(self.prompt)
                 sys.stdout.flush()
+        
+        elif msg_type == "CHAT":
+            sender = msg.payload.get('sender', 'Unknown')
+            message = msg.payload.get('message', '')
+            self._handle_chat_message(sender, message)
+    
+    def _send_chat(self, message: str):
+        """Send a chat message with user name"""
+        msg = NetworkMessage("CHAT", {
+            "sender": self.user_name,
+            "message": message
+        })
+        self._send(msg)
     
     def _input_listener(self):
         """Listen for client input"""
@@ -284,13 +301,10 @@ class SWMClient:
                     if msvcrt.kbhit():
                         char = msvcrt.getch()
                         if char == b'\r':  # Enter
-                            print()  # New line
-                            
-                            # Hide prompt while processing
+                            print()
                             self.show_prompt = False
                             
                             if not cmd_buffer.strip():
-                                # Toggle pause mode
                                 self.pause_mode = not self.pause_mode
                                 if self.pause_mode:
                                     print("[CLIENT] PAUSE MODE enabled. Updates paused. Press Enter to resume.")
@@ -301,7 +315,6 @@ class SWMClient:
                                 self.command_queue.append(cmd_buffer.strip())
                             
                             cmd_buffer = ""
-                            # Show prompt again
                             self.show_prompt = True
                             if self.running:
                                 sys.stdout.write(self.prompt)
@@ -309,7 +322,6 @@ class SWMClient:
                         elif char == b'\x08':  # Backspace
                             if cmd_buffer:
                                 cmd_buffer = cmd_buffer[:-1]
-                                # Handle backspace display
                                 sys.stdout.write('\b \b')
                                 sys.stdout.flush()
                         else:
@@ -325,8 +337,7 @@ class SWMClient:
                     if select.select([sys.stdin], [], [], 0.1)[0]:
                         char = sys.stdin.read(1)
                         if char == '\n' or char == '\r':
-                            print()  # New line
-                            
+                            print()
                             self.show_prompt = False
                             
                             if not cmd_buffer.strip():
@@ -367,7 +378,6 @@ class SWMClient:
         parts = cmd.split()
         command = parts[0].lower()
         
-        # Local commands
         if command in ['q', 'quit', 'exit']:
             print("\n[CLIENT] Disconnecting...")
             self.running = False
@@ -388,6 +398,7 @@ class SWMClient:
             print("  set world <key> <val> - Modify global world state")
             print("  save                 - Save current world state on server")
             print("  mode                 - Show current server mode")
+            print("  chat <message>       - Send a chat message to all clients")
             print("  resume               - Resume updates (exit pause mode)")
             print("  q / quit / exit      - Disconnect and exit")
             print("="*60)
@@ -406,7 +417,18 @@ class SWMClient:
                 print("[CLIENT] Already in LIVE mode.")
             return False
         
-        # Commands sent to server
+        if command == 'chat':
+            if len(parts) < 2:
+                print("[ERROR] Usage: chat <message>")
+                return False
+            if self.connected:
+                message = ' '.join(parts[1:])
+                self._send_chat(message)
+                print(f"[CLIENT] Sent chat: {message}")
+            else:
+                print("[CLIENT] Not connected to server.")
+            return False
+        
         if self.connected:
             self._send_command(cmd)
             print(f"[CLIENT] Sent command to server: {cmd}")
@@ -429,7 +451,6 @@ class SWMClient:
         self.running = True
         self.send_hello()
         
-        # Start input listener thread
         self.input_thread = threading.Thread(target=self._input_listener, daemon=True)
         self.input_thread.start()
         
@@ -440,10 +461,8 @@ class SWMClient:
         
         try:
             while self.running:
-                # Process commands from input thread
                 while self.command_queue:
                     cmd = self.command_queue.pop(0)
-                    # Hide prompt while processing command
                     self.show_prompt = False
                     if self._process_command(cmd):
                         return
@@ -461,7 +480,6 @@ class SWMClient:
                 if messages:
                     for msg in messages:
                         self._handle_message(msg)
-                    # Don't show prompt here, it's shown by _render or _handle_message
                 
                 time.sleep(0.05)
                 

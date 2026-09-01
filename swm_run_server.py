@@ -61,7 +61,7 @@ class SWMServer:
         self.continuous_mode = False
         self.command_queue = []
         self.input_thread = None
-        self.client_messages = []  # Queue for client commands
+        self.client_messages = []
         
         # Server mode flags
         self.interactive_mode = getattr(self.args, 'interact', False)
@@ -202,7 +202,8 @@ class SWMServer:
         
         output.append(f"\n[CLIENTS] ({client_count})")
         for client_id in client_list:
-            output.append(f"  - {client_id}")
+            client_name = self.client_data.get(client_id, {}).get('user_name', client_id)
+            output.append(f"  - {client_name} ({client_id})")
         
         events = self.world_runner.event_history[-10:]
         if events:
@@ -228,6 +229,24 @@ class SWMServer:
         print(full_render_string)
         self._log(full_render_string)
         sys.stdout.flush()
+    
+    def _broadcast_chat(self, sender: str, message: str):
+        """Broadcast a chat message to all connected clients"""
+        chat_msg = NetworkMessage("CHAT", {
+            "sender": sender,
+            "message": message,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        print(f"\n[CHAT] {sender}: {message}")
+        self._log(f"[CHAT] {sender}: {message}")
+        
+        with self.client_lock:
+            for client_id in list(self.clients.keys()):
+                try:
+                    self.clients[client_id].sendall((chat_msg.to_json() + '\n').encode('utf-8'))
+                except Exception:
+                    pass
     
     def _accept_clients(self):
         """Accept new client connections in a loop"""
@@ -304,13 +323,19 @@ class SWMServer:
                 self._send_to_client(client_id, NetworkMessage("ERROR", {"message": "Authentication failed"}))
                 return
             
+            # Store client name
+            user_name = msg.payload.get('user_name', client_id)
+            with self.client_lock:
+                if client_id in self.client_data:
+                    self.client_data[client_id]['user_name'] = user_name
+            
             mode = "dynamic" if self.dynamic_mode else "interactive" if self.interactive_mode else "auto"
             self._send_to_client(client_id, NetworkMessage("WELCOME", {
                 "client_id": client_id,
                 "world_state": self.world_runner.world.world_states.to_dict(),
                 "mode": mode
             }))
-            print(f"[SERVER] Client {client_id} authenticated")
+            print(f"[SERVER] Client {client_id} authenticated as {user_name}")
             
         elif msg_type == "GET_WORLD_STATE":
             self._send_to_client(client_id, NetworkMessage("WORLD_STATE", {
@@ -333,13 +358,32 @@ class SWMServer:
             cmd = msg.payload.get('command', '')
             if cmd:
                 print(f"[SERVER] Client {client_id} executed command: {cmd}")
-                # Process command immediately
-                result = self._execute_command_with_output(cmd)
-                # Send result back to client
-                self._send_to_client(client_id, NetworkMessage("COMMAND_RESULT", {
-                    "command": cmd,
-                    "result": result
-                }))
+                
+                # Check if it's a chat command
+                if cmd.strip().lower().startswith('chat '):
+                    message = cmd[5:].strip()
+                    if message:
+                        client_name = self.client_data.get(client_id, {}).get('user_name', client_id)
+                        self._broadcast_chat(client_name, message)
+                        self._send_to_client(client_id, NetworkMessage("COMMAND_RESULT", {
+                            "command": cmd,
+                            "result": f" Chat sent: {message}"
+                        }))
+                    else:
+                        self._send_to_client(client_id, NetworkMessage("ERROR", {
+                            "message": "Chat message cannot be empty"
+                        }))
+                else:
+                    result = self._execute_command_with_output(cmd)
+                    self._send_to_client(client_id, NetworkMessage("COMMAND_RESULT", {
+                        "command": cmd,
+                        "result": result
+                    }))
+                
+        elif msg_type == "CHAT":
+            sender = msg.payload.get('sender', client_id)
+            message = msg.payload.get('message', '')
+            self._broadcast_chat(sender, message)
                 
         elif msg_type == "PING":
             self._send_to_client(client_id, NetworkMessage("PONG", {"timestamp": datetime.now().isoformat()}))
@@ -356,16 +400,13 @@ class SWMServer:
                 return "✓ Tick executed"
             return "No command"
         
-        # Capture output
         output_buffer = io.StringIO()
         
-        # For commands that produce output, capture it
         with redirect_stdout(output_buffer):
             should_exit = self._execute_server_command(cmd)
         
         result = output_buffer.getvalue()
         
-        # If no output was produced, provide feedback
         if not result:
             if should_exit:
                 return "Server shutting down..."
@@ -409,6 +450,7 @@ class SWMServer:
             print("  mode                 - Show current mode")
             print("  c / continue         - Enter continuous mode (interactive mode)")
             print("  stop                 - Stop continuous mode (interactive mode)")
+            print("  chat <message>       - Send a chat message to all clients")
             print("  q / quit / exit      - Save and exit")
             print("="*60)
             return False
@@ -452,6 +494,14 @@ class SWMServer:
             else:
                 print("[SERVER] 'stop' command only available in interactive mode.")
                 return False
+        
+        if command == 'chat':
+            if len(parts) < 2:
+                print("[ERROR] Usage: chat <message>")
+                return False
+            message = ' '.join(parts[1:])
+            self._broadcast_chat("SERVER", message)
+            return False
         
         if command == 'summary':
             if self.world_runner:
@@ -724,25 +774,21 @@ class SWMServer:
         print("INTERACTIVE MODE")
         print("Commands: [Enter] / n / next - Step forward one epoch")
         print("          c / continue       - Run continuously (Ctrl+C to stop)")
+        print("          chat <message>     - Send chat to all clients")
         print("          Type 'help' for all commands")
         print("="*70)
         
-        # Show initial state
         self._render(force=True)
         
-        # Start input listener
         self.input_thread = threading.Thread(target=self._input_listener, daemon=True)
         self.input_thread.start()
         
-        # Show prompt
         sys.stdout.write("\n[INTERACTIVE] > ")
         sys.stdout.flush()
         
         while self.running:
-            # Handle client messages first (non-blocking)
             self._handle_clients()
             
-            # Process queued commands from keyboard
             while self.command_queue:
                 cmd = self.command_queue.pop(0)
                 should_exit = self._execute_server_command(cmd)
@@ -773,25 +819,20 @@ class SWMServer:
         print("Type 'help' for available commands, 'q' to quit.")
         print("="*70)
         
-        # Show initial state
         self._render(force=True)
         
-        # Start input listener
         self.input_thread = threading.Thread(target=self._input_listener, daemon=True)
         self.input_thread.start()
         
         while self.running:
-            # Handle client messages first (non-blocking)
             self._handle_clients()
             
-            # Process queued commands from keyboard
             while self.command_queue:
                 cmd = self.command_queue.pop(0)
                 should_exit = self._execute_server_command(cmd)
                 if should_exit:
                     return
             
-            # Update world continuously
             start_time = time.time()
             self.world_runner._update_world(render=True)
             self._broadcast_world_state()
@@ -827,7 +868,6 @@ class SWMServer:
         
         print(f"[SERVER] Listening on {self.host}:{self.port}")
         
-        # Start client acceptance thread
         accept_thread = threading.Thread(target=self._accept_clients, daemon=True)
         accept_thread.start()
         
@@ -850,7 +890,6 @@ class SWMServer:
         
         try:
             while self.running:
-                # Handle client messages
                 self._handle_clients()
                 
                 start_time = time.time()
