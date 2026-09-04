@@ -244,7 +244,18 @@ Your role is to:
             
         print("[AGENT] Initializing agent state...")
         self.initialized = True
-        print("[AGENT] ✓ Initialization complete!")
+        
+        # Ejecutar comandos automáticos al conectarse (ej. summary y list)
+        if self.role == "join":
+            print("[AGENT] Executing initial sync commands (summary, list)...")
+            self._execute_local_command("summary")
+            self._execute_local_command("catalog")
+            self._execute_local_command("var")
+            self._execute_local_command("list")
+            self._execute_local_command("history")
+            self._execute_local_command("chatlog")
+            
+        print("[AGENT] Initialization complete!")
     
     def _strip_lmstudio_internal(self, text: str) -> str:
         """Remove LM Studio internal markers from text - preserves spaces"""
@@ -465,6 +476,8 @@ IMPORTANT: Output ONLY the response. No thinking, no reasoning, no meta-commenta
         """Generate a chat message based on current context"""
         if not self.initialized:
             return None
+            #if self.role == "host" or self.is_connected:
+            #    self._initialize_agent()
         
         _, _, _, epoch = self._get_current_state()
         if epoch - self.last_chat_epoch < self.agent_chat_frequency:
