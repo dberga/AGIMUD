@@ -13,6 +13,7 @@ import subprocess
 import threading
 import select
 import io
+import glob
 from contextlib import redirect_stdout
 from datetime import datetime
 from typing import Dict, List, Any, Optional
@@ -43,6 +44,57 @@ class NetworkMessage:
         return msg
 
 
+class CustomLogger:
+    """Custom logger that accumulates all epochs in a single file"""
+    
+    def __init__(self, world_folder: str):
+        self.world_folder = world_folder
+        self.log_file = None
+        self.file_handle = None
+        self.start_time = datetime.now()
+        self._init_log_file()
+    
+    def _init_log_file(self):
+        """Initialize the log file with a timestamp"""
+        timestamp = self.start_time.strftime("%d_%m_%Y-%H_%M_%S")
+        self.log_file = os.path.join(self.world_folder, f"run_{timestamp}.log")
+        
+        # Create or append to the file
+        mode = 'a' if os.path.exists(self.log_file) else 'w'
+        self.file_handle = open(self.log_file, mode, encoding='utf-8')
+        
+        # If it's a new file, write a header
+        if mode == 'w':
+            self.file_handle.write("="*80 + "\n")
+            self.file_handle.write(f"SWM RUN LOG - Started: {self.start_time.isoformat()}\n")
+            self.file_handle.write("="*80 + "\n\n")
+            self.file_handle.flush()
+    
+    def log_epoch(self, epoch_data: str):
+        """Log a single epoch's data"""
+        if not self.file_handle:
+            return
+        
+        try:
+            # Write separator and timestamp
+            self.file_handle.write("\n" + "-"*80 + "\n")
+            self.file_handle.write(f"EPOCH LOG - {datetime.now().isoformat()}\n")
+            self.file_handle.write("-"*80 + "\n")
+            self.file_handle.write(epoch_data + "\n")
+            self.file_handle.flush()
+        except Exception as e:
+            print(f"[ERROR] Failed to write log: {e}")
+    
+    def close(self):
+        """Close the log file"""
+        if self.file_handle:
+            self.file_handle.write("\n" + "="*80 + "\n")
+            self.file_handle.write(f"LOG ENDED - {datetime.now().isoformat()}\n")
+            self.file_handle.write("="*80 + "\n")
+            self.file_handle.close()
+            self.file_handle = None
+
+
 class SWMServer:
     """Centralized server for SWM with real-time client updates"""
     
@@ -62,6 +114,13 @@ class SWMServer:
         self.command_queue = []
         self.input_thread = None
         self.client_messages = []
+        
+        # Chat history storage
+        self.chat_history = []
+        self.chatlog_file = None
+        
+        # Custom logger for accumulating all epochs
+        self.epoch_logger = None
         
         # Server mode flags
         self.interactive_mode = getattr(self.args, 'interact', False)
@@ -86,9 +145,62 @@ class SWMServer:
             os.makedirs(self.world_folder, exist_ok=True)
             print(f"[SERVER] Created world folder: {self.world_folder}")
         
+        # Initialize chatlog file
+        self.chatlog_file = os.path.join(self.world_folder, "chatlog.txt")
+        self._load_chat_history()
+        
+        # Initialize epoch logger
+        self.epoch_logger = CustomLogger(self.world_folder)
+        
         print(f"[SERVER] Initialized on {self.host}:{self.port}")
         print(f"[SERVER] Using world folder: {self.world_folder}")
+        print(f"[SERVER] Chat log: {self.chatlog_file}")
+        print(f"[SERVER] Epoch log: {self.epoch_logger.log_file}")
         print(f"[SERVER] Interactive mode: {self.interactive_mode}, Dynamic mode: {self.dynamic_mode}")
+    
+    def _load_chat_history(self):
+        """Load chat history from file"""
+        if os.path.exists(self.chatlog_file):
+            try:
+                with open(self.chatlog_file, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                    for line in lines:
+                        line = line.strip()
+                        if line:
+                            # Parse timestamp and message
+                            try:
+                                # Format: [2026-09-04T12:34:56] Sender: message
+                                if '] ' in line and ': ' in line[line.index('] ')+2:]:
+                                    timestamp_part = line[1:line.index('] ')]
+                                    rest = line[line.index('] ')+2:]
+                                    if ': ' in rest:
+                                        sender, message = rest.split(': ', 1)
+                                        self.chat_history.append({
+                                            'timestamp': timestamp_part,
+                                            'sender': sender,
+                                            'message': message
+                                        })
+                            except:
+                                pass
+                print(f"[SERVER] Loaded {len(self.chat_history)} chat messages from history")
+            except Exception as e:
+                print(f"[WARNING] Could not load chat history: {e}")
+    
+    def _save_chat_message(self, sender: str, message: str):
+        """Save a chat message to the chatlog file"""
+        timestamp = datetime.now().isoformat()
+        entry = {
+            'timestamp': timestamp,
+            'sender': sender,
+            'message': message
+        }
+        self.chat_history.append(entry)
+        
+        try:
+            with open(self.chatlog_file, 'a', encoding='utf-8') as f:
+                f.write(f"[{timestamp}] {sender}: {message}\n")
+        except Exception as e:
+            print(f"[WARNING] Could not save chat message: {e}")
     
     def _load_config(self, config_file: str) -> Dict[str, Any]:
         if os.path.exists(config_file):
@@ -143,6 +255,35 @@ class SWMServer:
         except Exception as e:
             print(f"[SERVER] Error generating world: {e}")
             return False
+    
+    def _get_latest_run_log_file(self) -> Optional[str]:
+        """
+        Get the most recent run log file in the world folder.
+        Now looks for the accumulated log file.
+        """
+        patterns = [
+            os.path.join(self.world_folder, "run_*.log"),
+            os.path.join(self.world_folder, "run_*.txt"),
+        ]
+        
+        all_files = []
+        for pattern in patterns:
+            files = glob.glob(pattern)
+            if files:
+                all_files.extend(files)
+        
+        if not all_files:
+            return None
+        
+        # Filter out directories and ensure files exist
+        all_files = [f for f in all_files if os.path.isfile(f)]
+        
+        if not all_files:
+            return None
+        
+        # Sort by modification time, newest first
+        all_files.sort(key=os.path.getmtime, reverse=True)
+        return all_files[0]
     
     def _render(self, force: bool = False):
         """Render server dashboard with real-time client count"""
@@ -226,6 +367,11 @@ class SWMServer:
             output.append("[SERVER] Auto mode: Running continuously.")
         
         full_render_string = "\n".join(output)
+        
+        # Log the epoch to the accumulated log file
+        if self.epoch_logger:
+            self.epoch_logger.log_epoch(full_render_string)
+        
         print(full_render_string)
         self._log(full_render_string)
         sys.stdout.flush()
@@ -237,6 +383,9 @@ class SWMServer:
             "message": message,
             "timestamp": datetime.now().isoformat()
         })
+        
+        # Save to chat history
+        self._save_chat_message(sender, message)
         
         print(f"\n[CHAT] {sender}: {message}")
         self._log(f"[CHAT] {sender}: {message}")
@@ -451,8 +600,58 @@ class SWMServer:
             print("  c / continue         - Enter continuous mode (interactive mode)")
             print("  stop                 - Stop continuous mode (interactive mode)")
             print("  chat <message>       - Send a chat message to all clients")
+            print("  history              - Show the most recent run log file")
+            print("  chatlog              - Show the chat history")
             print("  q / quit / exit      - Save and exit")
             print("="*60)
+            return False
+        
+        # --- COMMAND: history ---
+        if command == 'history':
+            log_file = self._get_latest_run_log_file()
+            if not log_file:
+                print(f"[ERROR] No run log files found in {self.world_folder}")
+                try:
+                    all_files = os.listdir(self.world_folder)
+                    if all_files:
+                        print(f"[INFO] Files in {self.world_folder}:")
+                        for f in all_files:
+                            print(f"  - {f}")
+                    else:
+                        print(f"[INFO] Directory {self.world_folder} is empty")
+                except Exception as e:
+                    print(f"[ERROR] Could not list directory: {e}")
+                return False
+            
+            try:
+                with open(log_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                print(f"\n=== HISTORY LOG: {os.path.basename(log_file)} ===")
+                print(f"File: {log_file}")
+                print(f"Size: {os.path.getsize(log_file)} bytes")
+                print(f"Modified: {datetime.fromtimestamp(os.path.getmtime(log_file)).isoformat()}")
+                print("-" * 60)
+                print(content)
+                print(f"\n=== END OF {os.path.basename(log_file)} ===")
+            except Exception as e:
+                print(f"[ERROR] Could not read log file: {e}")
+            return False
+        
+        # --- COMMAND: chatlog ---
+        if command == 'chatlog':
+            if not self.chat_history:
+                print("\n[CHATLOG] No chat messages yet.")
+                return False
+            
+            print(f"\n=== CHAT HISTORY ({len(self.chat_history)} messages) ===")
+            print("-" * 60)
+            for entry in self.chat_history:
+                timestamp = entry.get('timestamp', '?')
+                sender = entry.get('sender', 'Unknown')
+                message = entry.get('message', '')
+                print(f"[{timestamp}] {sender}: {message}")
+            print("-" * 60)
+            print(f"=== END OF CHAT HISTORY ===")
             return False
         
         if command == 'mode':
@@ -766,7 +965,13 @@ class SWMServer:
             except:
                 pass
         
+        # Close the epoch logger
+        if self.epoch_logger:
+            self.epoch_logger.close()
+        
         print(f"[SERVER] Cleanup complete. Log saved to {os.path.join(self.world_folder, 'server.log')}")
+        print(f"[SERVER] Chat log saved to {self.chatlog_file}")
+        print(f"[SERVER] Epoch log saved to {self.epoch_logger.log_file if self.epoch_logger else 'unknown'}")
     
     def _run_interactive_mode(self):
         """Run in interactive mode - step by step"""
@@ -775,6 +980,8 @@ class SWMServer:
         print("Commands: [Enter] / n / next - Step forward one epoch")
         print("          c / continue       - Run continuously (Ctrl+C to stop)")
         print("          chat <message>     - Send chat to all clients")
+        print("          history            - Show the most recent run log file")
+        print("          chatlog            - Show the chat history")
         print("          Type 'help' for all commands")
         print("="*70)
         

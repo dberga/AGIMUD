@@ -226,9 +226,9 @@ class SWMClient:
         
         output.append("\n" + "="*80)
         if self.pause_mode:
-            output.append("Press Enter to resume updates | Commands: help, summary, catalog, var, list, action, set, save, mode, chat, q")
+            output.append("Press Enter to resume updates | Commands: help, summary, catalog, var, list, action, set, save, mode, chat, history, chatlog, q")
         else:
-            output.append("Press Enter to pause updates | Commands: help, summary, catalog, var, list, action, set, save, mode, chat, q")
+            output.append("Press Enter to pause updates | Commands: help, summary, catalog, var, list, action, set, save, mode, chat, history, chatlog, q")
         
         print("\n".join(output))
         sys.stdout.flush()
@@ -399,6 +399,8 @@ class SWMClient:
             print("  save                 - Save current world state on server")
             print("  mode                 - Show current server mode")
             print("  chat <message>       - Send a chat message to all clients")
+            print("  history              - Request the most recent run log from server")
+            print("  chatlog              - Request the chat history from server")
             print("  resume               - Resume updates (exit pause mode)")
             print("  q / quit / exit      - Disconnect and exit")
             print("="*60)
@@ -425,6 +427,15 @@ class SWMClient:
                 message = ' '.join(parts[1:])
                 self._send_chat(message)
                 print(f"[CLIENT] Sent chat: {message}")
+            else:
+                print("[CLIENT] Not connected to server.")
+            return False
+        
+        # --- NEW COMMANDS: history and chatlog ---
+        if command in ['history', 'chatlog']:
+            if self.connected:
+                self._send_command(cmd)
+                print(f"[CLIENT] Sent command to server: {cmd}")
             else:
                 print("[CLIENT] Not connected to server.")
             return False

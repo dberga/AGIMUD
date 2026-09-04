@@ -59,6 +59,8 @@ class SWMAgentClient(SWMClient):
         self.server_catalog: str = ""
         self.server_vars: str = ""
         self.server_list: str = ""
+        self.server_history: str = ""  # NEW: Cache for history
+        self.server_chatlog: str = ""  # NEW: Cache for chatlog
         
         # LM Studio configuration
         self.model_key: Optional[str] = None
@@ -124,54 +126,6 @@ Your role is to:
 - You can narrate actions and events using *descriptions*
 - IMPORTANT: Output ONLY the narration. Do NOT include any thinking, reasoning, or meta-commentary.
 {style_text}"""
-    
-    def _load_chat_history_from_file(self, file_path: Optional[str] = None) -> List[str]:
-        """Load chat history from a file - supports run_*.txt pattern"""
-        if not file_path:
-            pattern = os.path.join(self.world_folder, "run_*.txt")
-            files = glob.glob(pattern)
-            if not files:
-                print(f"[AGENT] No run_*.txt files found in {self.world_folder}")
-                return []
-            latest_file = max(files, key=os.path.getmtime)
-            file_path = latest_file
-            print(f"[AGENT] Using latest chat history file: {os.path.basename(file_path)}")
-        
-        if not os.path.exists(file_path):
-            print(f"[AGENT] Chat history file not found: {file_path}")
-            return []
-        
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            lines = content.split('\n')
-            chat_lines = []
-            chat_pattern = re.compile(r'\[CHAT\]\s+([^:]+):\s+(.+)')
-            event_pattern = re.compile(r'\[(\d+)\]\s+(.+)')
-            
-            for line in lines:
-                chat_match = chat_pattern.search(line)
-                if chat_match:
-                    sender = chat_match.group(1).strip()
-                    message = chat_match.group(2).strip()
-                    if sender != self.user_name:
-                        chat_lines.append(f"{sender}: {message}")
-                    continue
-                
-                event_match = event_pattern.search(line)
-                if event_match:
-                    event_text = event_match.group(2).strip()
-                    if any(keyword in event_text.lower() for keyword in 
-                          ['action', 'movement', 'social', 'chat', 'speak', 'talk']):
-                        chat_lines.append(f"[Event] {event_text}")
-            
-            print(f"[AGENT] Loaded {len(chat_lines)} chat/event lines")
-            return chat_lines
-            
-        except Exception as e:
-            print(f"[AGENT] Error loading chat history: {e}")
-            return []
     
     def _get_character_context(self) -> str:
         """Build context string for the character"""
@@ -321,26 +275,37 @@ Your role is to:
         result = self._execute_server_command("summary")
         if result:
             self.server_summary = result
-            print("[AGENT] ✓ Loaded world summary")
+            print("[AGENT] Loaded world summary")
         
         result = self._execute_server_command("catalog")
         if result:
             self.server_catalog = result
-            print("[AGENT] ✓ Loaded action catalog")
+            print("[AGENT] Loaded action catalog")
         
         result = self._execute_server_command("var")
         if result:
             self.server_vars = result
-            print("[AGENT] ✓ Loaded variable catalog")
+            print("[AGENT] Loaded variable catalog")
         
         result = self._execute_server_command("list")
         if result:
             self.server_list = result
-            print("[AGENT] ✓ Loaded character/object list")
+            print("[AGENT] Loaded character/object list")
+        
+        # NEW: Load history and chatlog
+        result = self._execute_server_command("history")
+        if result:
+            self.server_history = result
+            print("[AGENT] Loaded run history")
+        
+        result = self._execute_server_command("chatlog")
+        if result:
+            self.server_chatlog = result
+            print("[AGENT] Loaded chat log")
         
         self.initialized = True
         self._initializing = False
-        print("[AGENT] ✓ Initialization complete!")
+        print("[AGENT] Initialization complete!")
     
     def _strip_lmstudio_internal(self, text: str) -> str:
         """Remove LM Studio internal markers from text - preserves spaces"""
@@ -663,6 +628,8 @@ IMPORTANT: Output ONLY the response. No thinking, no reasoning, no meta-commenta
                 print("  agent catalog              - List actions in catalog")
                 print("  agent var                  - List available variables")
                 print("  agent list                 - List characters, states, HP")
+                print("  agent history_log          - Get run history log")
+                print("  agent chatlog              - Get chat history log")
                 print("  agent init                 - Re-initialize with server data")
                 return False
             
@@ -710,17 +677,6 @@ IMPORTANT: Output ONLY the response. No thinking, no reasoning, no meta-commenta
                 print(f"[AGENT] Chat style set to: {self.chat_style}")
                 return False
             
-            elif subcmd == 'history':
-                file_path = None
-                if len(parts) > 2:
-                    file_path = ' '.join(parts[2:])
-                self.loaded_chat_history = self._load_chat_history_from_file(file_path)
-                if self.loaded_chat_history:
-                    print(f"[AGENT] Loaded {len(self.loaded_chat_history)} chat history entries")
-                else:
-                    print("[AGENT] No chat history loaded")
-                return False
-            
             elif subcmd == 'summary':
                 if self.connected:
                     result = self._execute_server_command("summary")
@@ -753,6 +709,24 @@ IMPORTANT: Output ONLY the response. No thinking, no reasoning, no meta-commenta
                         print(f"\n[CHARACTERS, OBJECTS, WORLD STATES]\n{result}")
                 return False
             
+            # NEW: history_log command
+            elif subcmd == 'history_log':
+                if self.connected:
+                    result = self._execute_server_command("history")
+                    if result:
+                        self.server_history = result
+                        print(f"\n[RUN HISTORY LOG]\n{result}")
+                return False
+            
+            # NEW: chatlog command
+            elif subcmd == 'chatlog':
+                if self.connected:
+                    result = self._execute_server_command("chatlog")
+                    if result:
+                        self.server_chatlog = result
+                        print(f"\n[CHAT HISTORY LOG]\n{result}")
+                return False
+            
             elif subcmd == 'init':
                 self.initialized = False
                 self._initialize_agent()
@@ -772,6 +746,8 @@ IMPORTANT: Output ONLY the response. No thinking, no reasoning, no meta-commenta
                 print(f"  Last chat epoch: {self.last_chat_epoch}")
                 print(f"  Live chat history: {len(self.chat_history)} messages")
                 print(f"  Initialized: {self.initialized}")
+                print(f"  History log cached: {'Yes' if self.server_history else 'No'}")
+                print(f"  Chatlog cached: {'Yes' if self.server_chatlog else 'No'}")
                 if self.mcp_servers:
                     print(f"  MCP servers: {', '.join(self.mcp_servers)}")
                 return False
@@ -839,7 +815,7 @@ IMPORTANT: Output ONLY the response. No thinking, no reasoning, no meta-commenta
             self.waiting_for_response = False
             cmd = msg.payload.get('command', '')
             result = msg.payload.get('result', '')
-            if cmd in ['summary', 'catalog', 'var', 'list']:
+            if cmd in ['summary', 'catalog', 'var', 'list', 'history', 'chatlog']:
                 if cmd == 'summary':
                     self.server_summary = result
                 elif cmd == 'catalog':
@@ -848,6 +824,10 @@ IMPORTANT: Output ONLY the response. No thinking, no reasoning, no meta-commenta
                     self.server_vars = result
                 elif cmd == 'list':
                     self.server_list = result
+                elif cmd == 'history':
+                    self.server_history = result
+                elif cmd == 'chatlog':
+                    self.server_chatlog = result
         
         elif msg_type == "CHAT":
             sender = msg.payload.get('sender', 'Unknown')
@@ -900,11 +880,6 @@ IMPORTANT: Output ONLY the response. No thinking, no reasoning, no meta-commenta
             print(f"MCP servers: {', '.join(self.mcp_servers)}")
         print(f"Model: {self.model_key or 'default'}")
         print("="*60)
-        
-        if self.chat_history_file:
-            self.loaded_chat_history = self._load_chat_history_from_file(self.chat_history_file)
-        elif self.world_folder:
-            self.loaded_chat_history = self._load_chat_history_from_file()
         
         if self.character_name:
             self.prompt = f"[{self.character_name}] > "

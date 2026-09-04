@@ -51,9 +51,11 @@ class SWMAgentP2PNode(SWMP2PNode):
         self.max_history: int = 20
         self.show_reasoning: bool = True
         self.chat_style: str = ""
-        self.chat_history_file: Optional[str] = None
-        self.loaded_chat_history: List[str] = []
         self.initialized: bool = False
+        
+        # Cache for commands
+        self.cached_history: str = ""
+        self.cached_chatlog: str = ""
         
         # LM Studio configuration
         self.model_key: Optional[str] = None
@@ -116,58 +118,6 @@ Your role is to:
 - IMPORTANT: Output ONLY the narration. Do NOT include any thinking, reasoning, or meta-commentary.
 {style_text}"""
     
-    def _load_chat_history_from_file(self, file_path: Optional[str] = None) -> List[str]:
-        """Load chat history from a file - supports run_*.txt pattern"""
-        if not file_path:
-            pattern = os.path.join(self.world_folder, "run_*.txt")
-            files = glob.glob(pattern)
-            if not files:
-                pattern = os.path.join(self.world_folder, "p2p_*.log")
-                files = glob.glob(pattern)
-                if not files:
-                    print(f"[AGENT] No chat history files found in {self.world_folder}")
-                    return []
-                    
-            latest_file = max(files, key=os.path.getmtime)
-            file_path = latest_file
-            print(f"[AGENT] Using latest chat history file: {os.path.basename(file_path)}")
-        
-        if not os.path.exists(file_path):
-            print(f"[AGENT] Chat history file not found: {file_path}")
-            return []
-        
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            lines = content.split('\n')
-            chat_lines = []
-            chat_pattern = re.compile(r'\[CHAT\]\s+([^:]+):\s+(.+)')
-            event_pattern = re.compile(r'\[(\d+)\]\s+(.+)')
-            
-            for line in lines:
-                chat_match = chat_pattern.search(line)
-                if chat_match:
-                    sender = chat_match.group(1).strip()
-                    message = chat_match.group(2).strip()
-                    if sender != self.user_name:
-                        chat_lines.append(f"{sender}: {message}")
-                    continue
-                
-                event_match = event_pattern.search(line)
-                if event_match:
-                    event_text = event_match.group(2).strip()
-                    if any(keyword in event_text.lower() for keyword in 
-                          ['action', 'movement', 'social', 'chat', 'speak', 'talk']):
-                        chat_lines.append(f"[Event] {event_text}")
-            
-            print(f"[AGENT] Loaded {len(chat_lines)} chat/event lines")
-            return chat_lines
-            
-        except Exception as e:
-            print(f"[AGENT] Error loading chat history: {e}")
-            return []
-            
     def _get_current_state(self) -> Tuple[Dict, List, List, int]:
         """Helper to get state regardless of host or joiner role"""
         if self.role == "host" and self.world_runner:
@@ -270,13 +220,8 @@ Your role is to:
         return "\n".join(context_parts)
     
     def _get_chat_history_context(self) -> str:
-        """Get recent chat history from loaded file and live chat"""
+        """Get recent chat history from live chat"""
         history_lines = []
-        
-        if self.loaded_chat_history:
-            history_lines.append("--- Historical chat from log files ---")
-            history_lines.extend(self.loaded_chat_history[-10:])
-            history_lines.append("--- End of historical chat ---")
         
         if self.chat_history:
             history_lines.append("--- Recent live chat ---")
@@ -577,10 +522,11 @@ IMPORTANT: Output ONLY the response. No thinking, no reasoning, no meta-commenta
                 print("  agent actions on/off       - Enable/disable actions (Host only)")
                 print("  agent reasoning on/off     - Show/hide AI reasoning")
                 print("  agent style <text>         - Set chat style")
-                print("  agent history [file]       - Load chat history")
                 print("  agent status               - Show agent status")
                 print("  agent say <message>        - Force agent to say something")
                 print("  agent act <action>         - Force agent to perform action (Host only)")
+                print("  agent history              - Show the most recent run log")
+                print("  agent chatlog              - Show the chat history")
                 return False
             
             subcmd = parts[1].lower()
@@ -629,16 +575,15 @@ IMPORTANT: Output ONLY the response. No thinking, no reasoning, no meta-commenta
                 print(f"[AGENT] Chat style set to: {self.chat_style}")
                 return False
             
+            # NEW: history command - uses the P2P node's built-in history command
             elif subcmd == 'history':
-                file_path = None
-                if len(parts) > 2:
-                    file_path = ' '.join(parts[2:])
-                self.loaded_chat_history = self._load_chat_history_from_file(file_path)
-                if self.loaded_chat_history:
-                    print(f"[AGENT] Loaded {len(self.loaded_chat_history)} chat history entries")
-                else:
-                    print("[AGENT] No chat history loaded")
-                return False
+                # Call the parent's _execute_local_command with "history"
+                return super()._execute_local_command("history")
+            
+            # NEW: chatlog command - uses the P2P node's built-in chatlog command
+            elif subcmd == 'chatlog':
+                # Call the parent's _execute_local_command with "chatlog"
+                return super()._execute_local_command("chatlog")
             
             elif subcmd == 'status':
                 print("\n[AGENT STATUS]")
@@ -648,9 +593,9 @@ IMPORTANT: Output ONLY the response. No thinking, no reasoning, no meta-commenta
                 print(f"  Actions enabled: {self.actions_enabled}")
                 print(f"  Show reasoning: {self.show_reasoning}")
                 print(f"  Chat style: {self.chat_style or 'None'}")
-                print(f"  Chat history loaded: {len(self.loaded_chat_history)} entries")
                 print(f"  Model: {self.model_key or 'default'}")
                 print(f"  Initialized: {self.initialized}")
+                print(f"  Chat messages: {len(self.chat_history)}")
                 return False
             
             elif subcmd == 'say' and len(parts) > 2:
@@ -781,11 +726,6 @@ IMPORTANT: Output ONLY the response. No thinking, no reasoning, no meta-commenta
             print(f"Chat style: {self.chat_style}")
         print(f"Model: {self.model_key or 'default'}")
         print("="*60)
-        
-        if self.chat_history_file:
-            self.loaded_chat_history = self._load_chat_history_from_file(self.chat_history_file)
-        elif self.world_folder:
-            self.loaded_chat_history = self._load_chat_history_from_file()
             
         if self.character_name:
             self.prompt = f"[{self.character_name}] > "
@@ -815,7 +755,6 @@ def parse_agent_args():
     parser.add_argument('--actions_enabled', '-a', action='store_true', help='Enable AI-generated actions (Host only)')
     parser.add_argument('--no-reasoning', action='store_true', help='Disable showing AI reasoning/thinking process')
     parser.add_argument('--chat_style', type=str, default="", help='Style for chat responses (e.g., "dramatic", "funny")')
-    parser.add_argument('--chat_history', nargs='?', const=True, default=None, help='Load chat history from file (uses latest if no path)')
     parser.add_argument('--world_folder', type=str, default='world_p2p', help='World folder path')
     parser.add_argument('--model', '-m', type=str, help='LM Studio model key')
     parser.add_argument('--temperature', '-t', type=float, default=0.8, help='Temperature for generation')
@@ -841,8 +780,6 @@ def main():
         agent_p2p.show_reasoning = False
     if args.chat_style:
         agent_p2p.chat_style = args.chat_style
-    if args.chat_history is not None:
-        agent_p2p.chat_history_file = args.chat_history if args.chat_history is not True else None
     if args.world_folder:
         agent_p2p.world_folder = args.world_folder
     if args.world:
