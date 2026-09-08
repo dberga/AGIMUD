@@ -1,4 +1,4 @@
-# Human-Agentic World Architecture (HAWA)
+# OpenRASA: Open World SDK for Recreating Socially-Aware Agents in Multi-Agent Simulations
 
 ## Customize your Simulated World
 
