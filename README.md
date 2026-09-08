@@ -1,4 +1,4 @@
-# OpenRASA: Open World SDK for Recreating Socially-Aware Agents and Multi-Agent Interaction
+# OpenRASA: Open World SDK for Recreating Socially-Aware Agents in Multi-Agent Simulations
 
 ## Customize your Simulated World
 
