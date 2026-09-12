@@ -1,4 +1,4 @@
-# AGIMUD: AGIMUD: Socially-Aware Agentic Artificial Intelligence for Interactive Multi-Agent Systems
+# AGIMUD: AGENTIC INTELLIGENCE AND MULTI-USER DUNGEONS
 
 ## Customize your Simulated World
 
