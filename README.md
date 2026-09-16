@@ -1,4 +1,4 @@
-# OpenRASA: Open World SDK for Recreating Socially-Aware Agents in Multi-Agent Simulations
+# AGIMUD: AGENTIC INTELLIGENCE AND MULTI-USER DUNGEONS
 
 ## Customize your Simulated World
 
