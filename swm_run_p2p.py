@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
 SWM Run P2P - P2P node for distributed SWM with dynamic config loading and 1-by-1 epoch streaming
-Integrated with interactive commands, pause/live mode, and command responses
+Integrated with interactive commands, pause/live mode, and command responses.
+Supports --max-epoch (default 10000) which stops the sim exactly like 'quit'
+and exports all CSVs + charts via the delegated TimelinePlotter.
 """
 
 import json
@@ -29,7 +31,7 @@ class NetworkMessage:
         self.payload = payload or {}
         self.sender = sender
         self.timestamp = datetime.now().isoformat()
-    
+
     def to_json(self) -> str:
         return json.dumps({
             "type": self.type,
@@ -37,7 +39,7 @@ class NetworkMessage:
             "sender": self.sender,
             "timestamp": self.timestamp
         })
-    
+
     @staticmethod
     def from_json(data: str) -> 'NetworkMessage':
         obj = json.loads(data)
@@ -48,7 +50,7 @@ class NetworkMessage:
 
 class SignalingServer:
     """Simple signaling server for P2P discovery"""
-    
+
     def __init__(self, host: str = "127.0.0.1", port: int = 7000, timeout: int = 5):
         self.host = host
         self.port = port
@@ -56,7 +58,7 @@ class SignalingServer:
         self.nodes: Dict[str, Dict[str, Any]] = {}
         self.running = False
         self.socket = None
-    
+
     def start(self):
         self.running = True
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -64,10 +66,10 @@ class SignalingServer:
         self.socket.bind((self.host, self.port))
         self.socket.listen(100)
         self.socket.setblocking(False)
-        
+
         print(f"[SIGNALING] Server started on {self.host}:{self.port}")
         sys.stdout.flush()
-        
+
         while self.running:
             try:
                 client_socket, addr = self.socket.accept()
@@ -78,10 +80,10 @@ class SignalingServer:
                 client_socket.close()
             except BlockingIOError:
                 pass
-            except Exception as e:
+            except Exception:
                 pass
             time.sleep(0.1)
-    
+
     def _handle_request(self, data: str, sock: socket.socket):
         try:
             msg = NetworkMessage.from_json(data)
@@ -91,14 +93,14 @@ class SignalingServer:
                 port = msg.payload.get('port')
                 if node_id:
                     self.nodes[node_id] = {"host": host, "port": port, "last_seen": datetime.now().isoformat()}
-                    peers = [{"id": nid, "host": info['host'], "port": info['port']} 
-                            for nid, info in self.nodes.items() if nid != node_id]
+                    peers = [{"id": nid, "host": info['host'], "port": info['port']}
+                             for nid, info in self.nodes.items() if nid != node_id]
                     response = NetworkMessage("PEERS", {"peers": peers})
                     sock.sendall((response.to_json() + '\n').encode('utf-8'))
                     sys.stdout.flush()
-        except Exception as e:
+        except Exception:
             pass
-    
+
     def stop(self):
         self.running = False
         if self.socket:
@@ -107,8 +109,8 @@ class SignalingServer:
 
 class SWMP2PNode:
     """P2P Node with integrated interactive commands and pause/live mode"""
-    
-    def __init__(self, config_file: str = "network_p2p_config.json", 
+
+    def __init__(self, config_file: str = "network_p2p_config.json",
                  role: str = "host", args: Any = None):
         self.config = self._load_config(config_file)
         self.role = role
@@ -117,16 +119,13 @@ class SWMP2PNode:
         self.peers: Dict[str, Dict[str, Any]] = {}
         self.node_socket = None
         self.world_runner = None
-        
-        # Server mode flags (for host)
+
         self.interactive_mode = getattr(self.args, 'interact', False)
         self.dynamic_mode = getattr(self.args, 'dynamic', False)
         self.continuous_mode = False
-        
-        # Track connected peers to avoid duplicate connect messages
+
         self.known_clients = set()
-        
-        # Interactive mode variables
+
         self.pause_mode = False
         self.show_prompt = True
         self.prompt = "[P2P] > "
@@ -134,79 +133,83 @@ class SWMP2PNode:
         self.input_thread = None
         self.last_render_time = 0
         self.waiting_for_input = False
-        
-        # Chat history
+
         self.chat_history = []
         self.chatlog_file = None
         self.max_history = 100
-        
-        # Cache for commands
+
         self.cached_history = ""
         self.cached_chatlog = ""
-        
-        # Deduplication for chat messages
+
         self.seen_chats = set()
         self.seen_chats_max = 100
-        
+
+        # NEW: max_epoch
+        self.max_epoch = getattr(self.args, 'max_epoch', 10000)
+        self.max_epoch_reached = False
+
         world_cfg = self.config.get('world', {'world_folder': 'world_p2p', 'sync_interval': 2.0, 'broadcast_interval': 1})
         node_cfg = self.config.get('node', {'id': 'node_001', 'host': '127.0.0.1', 'port': 6000})
         conn_cfg = self.config.get('connection', {'timeout': 5})
         user_cfg = self.config.get('user', {'name': f'P2P_{self.role}'})
-        
+
         self.user_name = user_cfg.get('name', f'P2P_{self.role}')
-        
+
         self.sync_interval = world_cfg.get('sync_interval', 2.0)
         self.broadcast_interval = world_cfg.get('broadcast_interval', 1)
         self.timeout = conn_cfg.get('timeout', 5)
         self.default_fps = 1.0
-        
+
         arg_world = getattr(self.args, 'world', None)
         if arg_world:
             self.world_folder = arg_world
         else:
             self.world_folder = world_cfg.get('world_folder', 'world_p2p')
-            
-        # Use different node IDs for host and joiner
+
         if self.role == "host":
             self.node_id = node_cfg.get('id', 'node_host')
         else:
             self.node_id = node_cfg.get('id', 'node_join') + "_" + str(int(time.time()))[-4:]
-            
+
         self.node_host = node_cfg.get('host', '127.0.0.1')
-        # Use different ports for host and joiner
         if self.role == "host":
             self.node_port = node_cfg.get('port', 6000)
         else:
             self.node_port = node_cfg.get('port', 6000) + 1
-        
+
         self.last_sync = 0
         self.last_render = 0
         self.render_interval = 1.0
         self.is_connected = False
         self.sync_attempts = 0
-        
+
         self.synced_world_state = {}
         self.synced_characters = []
         self.synced_objects = []
         self.synced_events = []
         self.synced_epoch = 0
-        
-        # Initialize chatlog file
+
         os.makedirs(self.world_folder, exist_ok=True)
         self.chatlog_file = os.path.join(self.world_folder, "chatlog.txt")
         self._load_chat_history()
-        
+
         if self.role == "host":
             print("[P2P] Starting signaling server...")
             sig_cfg = self.config.get('signaling_server', {'host': '127.0.0.1', 'port': 7000})
-            threading.Thread(target=self._run_signaling_server, args=(sig_cfg['host'], sig_cfg['port'], self.timeout), daemon=True).start()
+            threading.Thread(target=self._run_signaling_server,
+                             args=(sig_cfg['host'], sig_cfg['port'], self.timeout),
+                             daemon=True).start()
             time.sleep(1)
-        
+
         print(f"[P2P] Node initialized as {self.role.upper()} - {self.node_id}")
         print(f"[P2P] Listening on {self.node_host}:{self.node_port}")
         print(f"[P2P] Broadcast Interval: every {self.broadcast_interval} tick(s)")
         print(f"[P2P] Chat log: {self.chatlog_file}")
-        
+        if self.max_epoch and self.max_epoch > 0:
+            print(f"[P2P] Max epochs: {self.max_epoch}")
+        else:
+            print(f"[P2P] Max epochs: unlimited")
+
         if self.role == "host":
             if self.interactive_mode:
                 print("[P2P] INTERACTIVE MODE: Press Enter for next epoch, 'c' for continuous")
@@ -217,12 +220,13 @@ class SWMP2PNode:
         else:
             print("[P2P] JOINER MODE: Syncing with host")
             print("[P2P] Make sure host is running with --host flag")
-        
+
         print("[P2P] Type 'help' for commands")
         sys.stdout.flush()
-    
+
+    # ==================== CHAT ====================
+
     def _load_chat_history(self):
-        """Load chat history from file"""
         if os.path.exists(self.chatlog_file):
             try:
                 with open(self.chatlog_file, 'r', encoding='utf-8') as f:
@@ -241,56 +245,43 @@ class SWMP2PNode:
                                             'sender': sender,
                                             'message': message
                                         })
-                            except:
+                            except Exception:
                                 pass
                 print(f"[P2P] Loaded {len(self.chat_history)} chat messages from history")
             except Exception as e:
                 print(f"[WARNING] Could not load chat history: {e}")
-    
+
     def _save_chat_message(self, sender: str, message: str):
-        """Save a chat message to the chatlog file"""
         timestamp = datetime.now().isoformat()
-        entry = {
-            'timestamp': timestamp,
-            'sender': sender,
-            'message': message
-        }
+        entry = {'timestamp': timestamp, 'sender': sender, 'message': message}
         self.chat_history.append(entry)
-        
         if len(self.chat_history) > self.max_history:
             self.chat_history = self.chat_history[-self.max_history:]
-        
         try:
             with open(self.chatlog_file, 'a', encoding='utf-8') as f:
                 f.write(f"[{timestamp}] {sender}: {message}\n")
         except Exception as e:
             print(f"[WARNING] Could not save chat message: {e}")
-    
+
     def _get_latest_run_log_file(self) -> Optional[str]:
-        """Get the most recent run log file in the world folder"""
         patterns = [
             os.path.join(self.world_folder, "run_*.log"),
             os.path.join(self.world_folder, "run_*.txt"),
             os.path.join(self.world_folder, "p2p_*.log"),
         ]
-        
         all_files = []
         for pattern in patterns:
             files = glob.glob(pattern)
             if files:
                 all_files.extend(files)
-        
         if not all_files:
             return None
-        
         all_files = [f for f in all_files if os.path.isfile(f)]
-        
         if not all_files:
             return None
-        
         all_files.sort(key=os.path.getmtime, reverse=True)
         return all_files[0]
-    
+
     def _load_config(self, config_file: str) -> Dict[str, Any]:
         if os.path.exists(config_file):
             try:
@@ -302,7 +293,7 @@ class SWMP2PNode:
         else:
             print(f"[WARNING] {config_file} not found, using defaults")
             return self._get_default_config()
-    
+
     def _get_default_config(self) -> Dict[str, Any]:
         return {
             "node": {"id": "node_host", "host": "127.0.0.1", "port": 6000},
@@ -311,11 +302,11 @@ class SWMP2PNode:
             "connection": {"timeout": 5},
             "user": {"name": "P2P_Player", "initial_scene": "Castle"}
         }
-    
+
     def _run_signaling_server(self, host: str, port: int, timeout: int):
         signaling = SignalingServer(host, port, timeout)
         signaling.start()
-    
+
     def _log(self, text: str):
         if not self.world_folder:
             return
@@ -324,14 +315,14 @@ class SWMP2PNode:
         try:
             with open(log_filename, 'a', encoding='utf-8') as f:
                 f.write(f"{datetime.now().isoformat()} - {text}\n")
-        except:
+        except Exception:
             pass
-    
+
     def _generate_world(self):
         try:
             print("[P2P] Generating world...")
-            result = subprocess.run([sys.executable, "swm_generate.py", "--folder", self.world_folder], 
-                                  capture_output=True, text=True, cwd=os.getcwd())
+            result = subprocess.run([sys.executable, "swm_generate.py", "--folder", self.world_folder],
+                                    capture_output=True, text=True, cwd=os.getcwd())
             if result.returncode != 0:
                 print(f"[P2P] Failed to generate world: {result.stderr}")
                 return
@@ -339,12 +330,12 @@ class SWMP2PNode:
             sys.stdout.flush()
         except Exception as e:
             print(f"[P2P] Error generating world: {e}")
-    
+
     def _initialize_world(self):
         required = ["characters.json", "objects.json", "scenes.json", "rules.json", "world_states.json"]
         os.makedirs(self.world_folder, exist_ok=True)
         all_exist = all(os.path.exists(os.path.join(self.world_folder, f)) for f in required)
-        
+
         if not all_exist:
             if self.role == "host":
                 print(f"[P2P] Generating world for host...")
@@ -353,44 +344,82 @@ class SWMP2PNode:
                 print(f"[P2P] Waiting for world sync from host...")
                 sys.stdout.flush()
                 return False
-        
+
         load_existing = not getattr(self.args, 'new', False)
         self.world_runner = WorldRunner(
             fps=1.0,
             load_existing=load_existing,
-            world_folder=self.world_folder
+            world_folder=self.world_folder,
+            max_epoch=self.max_epoch
         )
         return True
-        
+
+    # ==================== MAX EPOCH ====================
+
+    def _save_all_on_exit(self):
+        """Save everything: runtime state, statistics, CSVs, charts."""
+        if not self.world_runner:
+            return
+        try:
+            self.world_runner._save_runtime_state()
+        except Exception as e:
+            print(f"[ERROR] Failed to save runtime state: {e}")
+        try:
+            self.world_runner._export_statistics()
+        except Exception as e:
+            print(f"[ERROR] Failed to export statistics: {e}")
+        try:
+            if hasattr(self.world_runner, 'plotter') and self.world_runner.plotter:
+                self.world_runner.plotter.export_all_csv()
+                self.world_runner.plotter.generate_all_charts()
+        except Exception as e:
+            print(f"[ERROR] Failed to export plotter data: {e}")
+        try:
+            self.world_runner._flush_log()
+        except Exception:
+            pass
+
+    def _check_max_epoch(self) -> bool:
+        """If max epoch reached, stop and save like 'quit'."""
+        if self.world_runner is None:
+            return False
+        if self.max_epoch is None or self.max_epoch <= 0:
+            return False
+        if self.world_runner.tick_count < self.max_epoch:
+            return False
+        if self.max_epoch_reached:
+            return True
+
+        self.max_epoch_reached = True
+        print(f"\n[MAX_EPOCH] Reached epoch limit ({self.max_epoch}). Saving state exactly like 'quit'...")
+        self._save_all_on_exit()
+        print(f"[MAX_EPOCH] State, statistics, CSVs and charts saved at Epoch {self.world_runner.tick_count}.")
+        return True
+
     def _broadcast_chat(self, sender: str, message: str):
-        """Broadcast a chat message to all peers"""
         display_name = sender
         if sender == self.node_id:
             display_name = self.user_name
-        
-        # Add to local seen set so we don't repeat it if another peer echoes it back
+
         msg_key = f"{display_name}:{message}"
         self.seen_chats.add(msg_key)
         if len(self.seen_chats) > self.seen_chats_max:
             self.seen_chats = set(list(self.seen_chats)[-self.seen_chats_max:])
-            
-        # Save locally and show
+
         self._save_chat_message(display_name, message)
         print(f"\n[CHAT] {display_name}: {message}")
         self._log(f"[CHAT] {display_name}: {message}")
-        
+
         if self.show_prompt:
             sys.stdout.write(self.prompt)
             sys.stdout.flush()
-        
-        # Create message to send
+
         chat_msg = NetworkMessage("CHAT", {
             "sender": display_name,
             "message": message,
             "timestamp": datetime.now().isoformat()
         }, sender=self.node_id)
-        
-        # Send to all peers
+
         for peer_id, peer_info in self.peers.items():
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -398,46 +427,37 @@ class SWMP2PNode:
                 sock.connect((peer_info['host'], peer_info['port']))
                 sock.sendall((chat_msg.to_json() + '\n').encode('utf-8'))
                 sock.close()
-            except Exception as e:
+            except Exception:
                 pass
 
     def _handle_chat_message(self, sender: str, message: str):
-        """Handle incoming chat message with deduplication"""
-        # Create a unique key for this message
         msg_key = f"{sender}:{message}"
-        
-        # Check if we've seen this message recently
         if msg_key in self.seen_chats:
             return
-        
-        # Add to seen set
         self.seen_chats.add(msg_key)
         if len(self.seen_chats) > self.seen_chats_max:
-            # Keep only the most recent messages
             self.seen_chats = set(list(self.seen_chats)[-self.seen_chats_max:])
-        
-        # Save to chat history
+
         self._save_chat_message(sender, message)
-        
         print(f"\n[CHAT] {sender}: {message}")
         if self.show_prompt:
             sys.stdout.write(self.prompt)
             sys.stdout.flush()
-            
+
     def register_with_signaling(self, silent: bool = False):
         try:
             sig_cfg = self.config.get('signaling_server', {'host': '127.0.0.1', 'port': 7000})
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(self.timeout)
             sock.connect((sig_cfg['host'], sig_cfg['port']))
-            
+
             msg = NetworkMessage("REGISTER", {
                 "node_id": self.node_id,
                 "host": self.node_host,
                 "port": self.node_port
             })
             sock.sendall((msg.to_json() + '\n').encode('utf-8'))
-            
+
             data = sock.recv(4096).decode('utf-8')
             if data:
                 response = NetworkMessage.from_json(data)
@@ -456,32 +476,31 @@ class SWMP2PNode:
             if not silent:
                 print(f"[P2P] Failed to register with signaling server: {e}")
             return False
-    
+
+    # ==================== RENDER ====================
+
     def _render(self, force: bool = False):
-        """Unified atomic render block with pause/live support"""
-        # Skip rendering in pause mode (except for force)
         if self.pause_mode and not force:
             current_time = time.time()
             if current_time - self.last_render_time < 15:
                 return
             self.last_render_time = current_time
-            
+
             if self.role == "host":
                 tick = self.world_runner.tick_count if self.world_runner else 0
             else:
                 tick = self.synced_epoch
-            
+
             status = f"[P2P] PAUSE MODE | Epoch: {tick} | Peers: {len(self.peers)} | Press Enter to resume"
             sys.stdout.write(f"\r{status}    \n")
             if self.show_prompt:
                 sys.stdout.write(self.prompt)
                 sys.stdout.flush()
             return
-        
-        # Build output
+
         output = []
         output.append("="*80)
-        
+
         if self.role == "host":
             ws = self.world_runner.world.world_states.to_dict() if self.world_runner else {}
             chars = self.world_runner.world.characters.get_all() if self.world_runner else []
@@ -490,22 +509,25 @@ class SWMP2PNode:
             epoch = timers.get('day_cycle', 0)
             tick = self.world_runner.tick_count if self.world_runner else 0
             events = self.world_runner.event_history[-10:] if self.world_runner else []
-            
+
             mode_str = "INTERACTIVE" if self.interactive_mode else "DYNAMIC" if self.dynamic_mode else "AUTO"
-            output.append(f"SWM P2P [HOST] - {mode_str} - EPOCH {tick} | Node: {self.node_id} | Peers: {len(self.peers)}")
+            epoch_str = f"EPOCH {tick}"
+            if self.max_epoch and self.max_epoch > 0:
+                epoch_str += f" / {self.max_epoch}"
+            output.append(f"SWM P2P [HOST] - {mode_str} - {epoch_str} | Node: {self.node_id} | Peers: {len(self.peers)}")
             if self.continuous_mode:
                 output.append("*** CONTINUOUS MODE ACTIVE ***")
             if self.pause_mode:
                 output.append("*** PAUSE MODE ACTIVE - Updates paused ***")
             output.append("="*80)
-            
+
             global_states = ws.get('global_states', {})
             output.append(f"\n[WORLD STATE]")
             output.append(f"  Weather: {global_states.get('weather', 'Unknown')}")
             output.append(f"  Time of Day: {global_states.get('time_of_day', 'Unknown')}")
             output.append(f"  Mood: {global_states.get('mood', 'combat')}")
             output.append(f"  Day Cycle: {epoch // 60:02d}:{epoch % 60:02d}")
-            
+
             output.append(f"\n[CHARACTERS] ({len(chars)})")
             for char in chars[:10]:
                 name = char.get('name', 'Unknown')
@@ -519,7 +541,7 @@ class SWMP2PNode:
                 output.append(f"  * {name} [{ai_state}] | Goal: {goal} | Emotion: {emotion} | HP:{health} | ST:{stamina} @ {location}")
             if len(chars) > 10:
                 output.append(f"  ... and {len(chars) - 10} more")
-            
+
             output.append(f"\n[OBJECTS] ({len(objs)})")
             for obj in objs[:3]:
                 name = obj.get('name', 'Unknown')
@@ -531,16 +553,14 @@ class SWMP2PNode:
                 output.append(f"  - {name} ({obj_type}) [{quality}] Durability:{durability}")
             if len(objs) > 3:
                 output.append(f"  ... and {len(objs) - 3} more")
-            
+
             if events:
                 output.append(f"\n[RECENT EVENTS]")
                 for event in events[-5:]:
                     t = event.get('tick', '?')
                     text = event.get('text', '')
                     output.append(f"  [{t}] {text}")
-                    
         else:
-            # Joiner view
             if not self.is_connected:
                 output.append(f"SWM P2P [JOINER] - WAITING FOR HOST... | Node: {self.node_id}")
                 output.append("="*80)
@@ -559,17 +579,17 @@ class SWMP2PNode:
                 if self.pause_mode:
                     output.append("*** PAUSE MODE ACTIVE - Updates paused ***")
                 output.append("="*80)
-                
+
                 global_states = self.synced_world_state.get('global_states', {})
                 timers = self.synced_world_state.get('global_timers', {})
                 day_cycle = timers.get('day_cycle', 0)
-                
+
                 output.append(f"\n[WORLD STATE]")
                 output.append(f"  Weather: {global_states.get('weather', 'Unknown')}")
                 output.append(f"  Time of Day: {global_states.get('time_of_day', 'Unknown')}")
                 output.append(f"  Mood: {global_states.get('mood', 'combat')}")
                 output.append(f"  Day Cycle: {int(day_cycle // 60):02d}:{int(day_cycle % 60):02d}")
-                
+
                 if self.synced_characters:
                     output.append(f"\n[CHARACTERS] ({len(self.synced_characters)})")
                     for char in self.synced_characters[:10]:
@@ -584,17 +604,16 @@ class SWMP2PNode:
                         output.append(f"  * {name} [{ai_state}] | Goal: {goal} | Emotion: {emotion} | HP:{health} | ST:{stamina} @ {location}")
                     if len(self.synced_characters) > 10:
                         output.append(f"  ... and {len(self.synced_characters) - 10} more")
-                
+
                 if self.synced_events:
                     output.append(f"\n[RECENT EVENTS]")
                     for event in self.synced_events[-5:]:
                         t = event.get('tick', '?')
                         text = event.get('text', '')
                         output.append(f"  [{t}] {text}")
-        
+
         output.append("\n" + "="*80)
-        
-        # Show different prompts based on mode
+
         if self.pause_mode:
             output.append("Press Enter to resume updates | Commands: help, summary, catalog, var, list, action, set, save, mode, history, chatlog, q")
         elif self.role == "host" and self.interactive_mode and not self.continuous_mode:
@@ -603,37 +622,32 @@ class SWMP2PNode:
             output.append("WAITING FOR HOST... Press Enter to pause updates | Commands: help, mode, q")
         else:
             output.append("Press Enter to pause updates | Commands: help, summary, catalog, var, list, action, set, save, mode, history, chatlog, q")
-        
+
         full_render_string = "\n".join(output)
-        
-        # Clear any pending input display
+
         sys.stdout.write("\r" + " " * 100 + "\r")
         print(full_render_string)
         self._log(full_render_string)
         sys.stdout.flush()
         self.last_render_time = time.time()
-        
-        # Show prompt
+
         if self.show_prompt:
             sys.stdout.write(self.prompt)
             sys.stdout.flush()
-    
+
+    # ==================== COMMANDS ====================
+
     def _execute_command(self, cmd: str) -> str:
-        """Execute a command and return output as string"""
         cmd = cmd.strip()
-        
         if not cmd:
             return ""
-        
         output_buffer = io.StringIO()
         with redirect_stdout(output_buffer):
             self._execute_local_command(cmd)
-        
         result = output_buffer.getvalue()
         return result if result else " Command executed"
-    
+
     def _send_command_to_host(self, cmd_string: str):
-        """Forward a command to the host for execution"""
         host_id = None
         for peer_id in self.peers:
             if 'host' in peer_id.lower() or peer_id.startswith('node_host'):
@@ -641,7 +655,7 @@ class SWMP2PNode:
                 break
         if not host_id and self.peers:
             host_id = list(self.peers.keys())[0]
-            
+
         if host_id:
             try:
                 host_info = self.peers[host_id]
@@ -663,27 +677,24 @@ class SWMP2PNode:
                 sys.stdout.flush()
 
     def _execute_local_command(self, cmd: str) -> bool:
-        """Execute a local command, returns True if should exit"""
         cmd_orig = cmd.strip()
         if not cmd_orig:
             return False
-        
+
         parts = cmd_orig.split()
         command = parts[0].lower()
 
-        # Forward remote commands to the host if we are a joiner
         remote_commands = ['summary', 'catalog', 'var', 'list', 'action', 'set', 'save']
         if self.role == "join" and command in remote_commands:
             self._send_command_to_host(cmd_orig)
             return False
-        
-        # Exit commands
+
         if command in ['q', 'quit', 'exit']:
             print("\n[P2P] Shutting down...")
             self.running = False
+            self._save_all_on_exit()
             return True
-        
-        # Help
+
         if command == 'help':
             print("\n" + "="*60)
             print("P2P NODE COMMANDS")
@@ -700,6 +711,9 @@ class SWMP2PNode:
             print("  set char <Name> <var> <val> - Modify character status variable")
             print("  set world <key> <val> - Modify global world state")
             print("  save                 - Save current world state")
+            print("  stats                - Export statistics to CSV and LaTeX")
+            print("  charts               - Generate all timeline charts")
+            print("  timelines            - Export all timeline CSVs")
             print("  mode                 - Show current mode")
             print("  resume               - Resume updates (exit pause mode)")
             print("  chat <message>       - Send a chat message to all peers")
@@ -708,7 +722,7 @@ class SWMP2PNode:
             print("  q / quit / exit      - Save and exit")
             print("="*60)
             return False
-            
+
         if command == 'chat':
             if len(parts) < 2:
                 print("[ERROR] Usage: chat <message>")
@@ -716,56 +730,50 @@ class SWMP2PNode:
             message = ' '.join(parts[1:])
             self._broadcast_chat(self.node_id, message)
             return False
-        
-        # --- history command ---
+
         if command == 'history':
             log_file = self._get_latest_run_log_file()
             if not log_file:
                 print(f"[ERROR] No run log files found in {self.world_folder}")
-                try:
-                    all_files = os.listdir(self.world_folder)
-                    if all_files:
-                        print(f"[INFO] Files in {self.world_folder}:")
-                        for f in all_files:
-                            print(f"  - {f}")
-                    else:
-                        print(f"[INFO] Directory {self.world_folder} is empty")
-                except Exception as e:
-                    print(f"[ERROR] Could not list directory: {e}")
                 return False
-            
             try:
                 with open(log_file, 'r', encoding='utf-8') as f:
                     content = f.read()
                 print(f"\n=== HISTORY LOG: {os.path.basename(log_file)} ===")
-                print(f"File: {log_file}")
-                print(f"Size: {os.path.getsize(log_file)} bytes")
-                print(f"Modified: {datetime.fromtimestamp(os.path.getmtime(log_file)).isoformat()}")
-                print("-" * 60)
                 print(content)
                 print(f"\n=== END OF {os.path.basename(log_file)} ===")
             except Exception as e:
                 print(f"[ERROR] Could not read log file: {e}")
             return False
-        
-        # --- chatlog command ---
+
         if command == 'chatlog':
             if not self.chat_history:
                 print("\n[CHATLOG] No chat messages yet.")
                 return False
-            
             print(f"\n=== CHAT HISTORY ({len(self.chat_history)} messages) ===")
-            print("-" * 60)
             for entry in self.chat_history:
-                timestamp = entry.get('timestamp', '?')
-                sender = entry.get('sender', 'Unknown')
-                message = entry.get('message', '')
-                print(f"[{timestamp}] {sender}: {message}")
-            print("-" * 60)
-            print(f"=== END OF CHAT HISTORY ===")
+                print(f"[{entry.get('timestamp', '?')}] {entry.get('sender', '?')}: {entry.get('message', '')}")
+            print("=== END OF CHAT HISTORY ===")
             return False
-            
-        # Mode
+
+        if command == 'stats':
+            if self.world_runner:
+                self.world_runner._export_statistics()
+                print("[OK] Statistics exported")
+            return False
+
+        if command == 'charts':
+            if self.world_runner and hasattr(self.world_runner, 'plotter'):
+                self.world_runner.plotter.generate_all_charts()
+                print("[OK] Charts generated")
+            return False
+
+        if command == 'timelines':
+            if self.world_runner and hasattr(self.world_runner, 'plotter'):
+                self.world_runner.plotter.export_all_csv()
+                print("[OK] Timeline CSVs exported")
+            return False
+
         if command == 'mode':
             print(f"\n[CURRENT MODE] {self.role.upper()}")
             print(f"  Node ID: {self.node_id}")
@@ -774,6 +782,8 @@ class SWMP2PNode:
             if self.role == "host":
                 print(f"  Server Mode: {'INTERACTIVE' if self.interactive_mode else 'DYNAMIC' if self.dynamic_mode else 'AUTO'}")
                 print(f"  Continuous: {'ON' if self.continuous_mode else 'OFF'}")
+                if self.max_epoch and self.max_epoch > 0:
+                    print(f"  Max epochs: {self.max_epoch} (reached: {self.max_epoch_reached})")
             else:
                 print(f"  Connected to host: {self.is_connected}")
                 print(f"  Synced Epoch: {self.synced_epoch}")
@@ -781,10 +791,12 @@ class SWMP2PNode:
                 print(f"  Local Epoch: {self.world_runner.tick_count}")
             print(f"  Chat messages: {len(self.chat_history)}")
             return False
-        
-        # Continuous mode (interactive mode only)
+
         if command == 'c' or command == 'continue':
             if self.role == "host" and self.interactive_mode:
+                if self.max_epoch_reached:
+                    print(f"[MAX_EPOCH] Cannot continue beyond {self.max_epoch}.")
+                    return False
                 if not self.continuous_mode:
                     self.continuous_mode = True
                     print(f"[P2P] Continuous mode activated at {self.default_fps} FPS. Type 'stop' to stop.")
@@ -793,8 +805,7 @@ class SWMP2PNode:
             else:
                 print("[P2P] 'continue' command only available in interactive mode.")
             return False
-        
-        # Stop continuous mode
+
         if command == 'stop':
             if self.role == "host" and self.interactive_mode and self.continuous_mode:
                 self.continuous_mode = False
@@ -805,8 +816,7 @@ class SWMP2PNode:
             else:
                 print("[P2P] 'stop' command only available in interactive mode.")
             return False
-        
-        # Resume
+
         if command == 'resume':
             if self.pause_mode:
                 self.pause_mode = False
@@ -815,22 +825,19 @@ class SWMP2PNode:
             else:
                 print("[P2P] Already in LIVE mode.")
             return False
-        
-        # Summary
+
         if command == 'summary':
             if self.world_runner:
                 self.world_runner._render()
             return False
-        
-        # Catalog
+
         if command == 'catalog':
             if self.world_runner:
                 print("\n[ACTION CATALOG]")
                 for idx, act in enumerate(self.world_runner.action_catalog, 1):
                     print(f"  {idx}. {act}")
             return False
-        
-        # Var
+
         if command == 'var':
             if self.world_runner:
                 print("\n[VARIABLE CATALOG]")
@@ -851,8 +858,7 @@ class SWMP2PNode:
                         print(f"    - {var}")
                 print()
             return False
-        
-        # List
+
         if command == 'list':
             if self.world_runner:
                 print("\n[CHARACTERS]")
@@ -860,12 +866,10 @@ class SWMP2PNode:
                     status = c.get('status_variables', {})
                     status_str = ", ".join([f"{k}:{v}" for k, v in status.items()]) if status else "No status"
                     print(f"  - {c.get('name')} | State: {c.get('ai_state')} | {status_str} | Location: {c.get('navigation', {}).get('current_location')}")
-                
                 print("\n[OBJECTS]")
                 for obj in self.world_runner.world.objects.get_all():
                     vars_str = ", ".join([f"{k}:{v}" for k, v in obj.get('object_variables', {}).items()]) if obj.get('object_variables') else "No variables"
                     print(f"  - {obj.get('name')} | Type: {obj.get('properties', {}).get('type', 'unknown')} | {vars_str}")
-                
                 print("\n[WORLD STATES]")
                 ws = self.world_runner.world.world_states.to_dict()
                 for key, value in ws.items():
@@ -878,8 +882,7 @@ class SWMP2PNode:
                     for key, value in ws['global_timers'].items():
                         print(f"  - global_timers.{key}: {value}")
             return False
-        
-        # Action
+
         if command == 'action':
             if not self.world_runner:
                 return False
@@ -888,11 +891,9 @@ class SWMP2PNode:
                 return False
             char_name = parts[1]
             action_intent = parts[2].upper()
-            
             if self.world_runner.action_catalog and action_intent not in self.world_runner.action_catalog:
                 print(f"[ERROR] '{action_intent}' is invalid. Type 'catalog' to check valid actions.")
                 return False
-            
             target_char = next((c for c in self.world_runner.world.characters.get_all() if c.get('name', '').lower() == char_name.lower()), None)
             if target_char:
                 loc = target_char.get('navigation', {}).get('current_location', 'Unknown')
@@ -902,8 +903,7 @@ class SWMP2PNode:
             else:
                 print(f"[ERROR] Character '{char_name}' not found.")
             return False
-        
-        # Set
+
         if command == 'set':
             if not self.world_runner:
                 return False
@@ -911,7 +911,7 @@ class SWMP2PNode:
                 print("[ERROR] Usage: set char <Name> <var> <val> OR set world <key> <val>")
                 return False
             sub_target = parts[1].lower()
-            
+
             if sub_target == 'char':
                 if len(parts) < 5:
                     print("[ERROR] Usage: set char <CharacterName> <variable> <value>")
@@ -919,7 +919,6 @@ class SWMP2PNode:
                 char_name = parts[2]
                 var_name = parts[3]
                 val_str = parts[4]
-                
                 target_char = next((c for c in self.world_runner.world.characters.get_all() if c.get('name', '').lower() == char_name.lower()), None)
                 if target_char:
                     status = target_char.get('status_variables', {})
@@ -934,18 +933,15 @@ class SWMP2PNode:
                                 new_val = float(val_str)
                             else:
                                 new_val = val_str
-                            
                             status[var_name] = new_val
                             target_char.set('status_variables', status)
                             print(f"[OK] Set {target_char.get('name')}'s {var_name} to {new_val}")
-                            self.world_runner._add_event(f"[ADMIN] Set {target_char.get('name')}'s {var_name} to {new_val}", 'admin', 'character', target_char.get('name'))
                         except ValueError:
                             print(f"[ERROR] Invalid number format for value '{val_str}'.")
                     else:
-                        print(f"[ERROR] Status variable '{var_name}' not found. Type 'var' to see available variables.")
+                        print(f"[ERROR] Status variable '{var_name}' not found.")
                 else:
                     print(f"[ERROR] Character '{char_name}' not found.")
-                    
             elif sub_target == 'world':
                 key = parts[2]
                 val_str = parts[3]
@@ -957,62 +953,56 @@ class SWMP2PNode:
                             new_val = float(val_str) if '.' in val_str else int(val_str)
                         except ValueError:
                             new_val = val_str
-                            
                     self.world_runner.world.world_states.set(key, new_val)
                     print(f"[OK] Set world state '{key}' to {new_val}")
-                    self.world_runner._add_event(f"[ADMIN] Set world state '{key}' to {new_val}", 'admin', 'world')
                 except Exception as e:
                     print(f"[ERROR] Failed to set world state: {e}")
             else:
                 print("[ERROR] Unknown set target. Use 'set char' or 'set world'.")
             return False
-        
-        # Save
+
         if command == 'save':
             if self.world_runner:
                 self.world_runner._save_runtime_state()
+                self.world_runner._export_statistics()
                 print(f"[OK] World state saved at Epoch {self.world_runner.tick_count}")
             return False
-        
+
         print(f"[P2P] Unknown command: {cmd_orig}. Type 'help' for available commands.")
         return False
-    
+
     def _execute_command_with_output(self, cmd: str) -> str:
-        """Execute a command and return the output as string (for network responses)"""
         cmd = cmd.strip()
-        
         if not cmd:
             return "No command"
-        
         output_buffer = io.StringIO()
         with redirect_stdout(output_buffer):
             self._execute_local_command(cmd)
-        
         result = output_buffer.getvalue()
         return result if result else " Command executed"
 
+    # ==================== PEER MESSAGES ====================
+
     def _handle_peer_message(self, msg: NetworkMessage, sock: socket.socket):
         msg_type = msg.type
-        
+
         if msg_type == "REQUEST_WORLD":
             if self.role == "host" and self.world_runner:
                 sender = msg.sender or 'unknown'
-                
-                # Solo notificar si es la primera vez que se conecta o si es un cliente nuevo
                 if sender not in self.known_clients:
                     self.known_clients.add(sender)
                     print(f"\n[P2P] Client connected: {sender}")
                     if self.show_prompt:
                         sys.stdout.write(self.prompt)
                         sys.stdout.flush()
-                
+
                 ws = self.world_runner.world.world_states.to_dict()
                 timers = ws.get('global_timers', {})
                 epoch = timers.get('day_cycle', 0)
                 chars = [c.to_dict() for c in self.world_runner.world.characters.get_all()]
                 objs = [o.to_dict() for o in self.world_runner.world.objects.get_all()]
                 events = self.world_runner.event_history[-10:]
-                
+
                 response = NetworkMessage("WORLD_STATE", {
                     "epoch": epoch,
                     "tick": self.world_runner.tick_count,
@@ -1023,7 +1013,7 @@ class SWMP2PNode:
                 }, sender=self.node_id)
                 sock.sendall((response.to_json() + '\n').encode('utf-8'))
                 return True
-                
+
         elif msg_type == "WORLD_STATE":
             if self.role == "join":
                 self.synced_epoch = msg.payload.get('tick', msg.payload.get('epoch', 0))
@@ -1033,7 +1023,7 @@ class SWMP2PNode:
                 self.synced_events = msg.payload.get('events', [])
                 self.is_connected = True
                 self.sync_attempts = 0
-                
+
                 if self.world_runner:
                     world = self.world_runner.world
                     for key, value in self.synced_world_state.items():
@@ -1047,18 +1037,14 @@ class SWMP2PNode:
                     if self.synced_events:
                         self.world_runner.event_history = self.synced_events
                     self.world_runner.tick_count = self.synced_epoch
-                
+
                 self._render()
                 return True
-        
+
         elif msg_type == "CHAT":
             sender = msg.payload.get('sender', msg.sender or 'Unknown')
             message = msg.payload.get('message', '')
-            
-            # Handle the chat message locally (with deduplication)
             self._handle_chat_message(sender, message)
-            
-            # Only HOST should re-broadcast to other peers
             if self.role == "host":
                 for peer_id, peer_info in self.peers.items():
                     if peer_id == msg.sender:
@@ -1069,30 +1055,26 @@ class SWMP2PNode:
                         peer_sock.connect((peer_info['host'], peer_info['port']))
                         peer_sock.sendall((msg.to_json() + '\n').encode('utf-8'))
                         peer_sock.close()
-                    except:
+                    except Exception:
                         pass
             return True
-        
-        # Handle COMMAND messages from peers
+
         elif msg_type == "COMMAND":
             cmd = msg.payload.get('command', '')
             sender = msg.sender or 'unknown'
-            
+
             print(f"\n[P2P] Client {sender} executed command: {cmd}")
             if self.show_prompt:
                 sys.stdout.write(self.prompt)
                 sys.stdout.flush()
-            
+
             if self.role == "host":
-                # Execute the command locally on the host
                 result = self._execute_command_with_output(cmd)
-                
-                # Send result back to the sender directly connecting to their IP/Port
                 response = NetworkMessage("COMMAND_RESULT", {
                     "command": cmd,
                     "result": result
                 }, sender=self.node_id)
-                
+
                 if sender in self.peers:
                     try:
                         peer_info = self.peers[sender]
@@ -1104,22 +1086,19 @@ class SWMP2PNode:
                     except Exception as e:
                         print(f"[P2P] Could not send COMMAND_RESULT to {sender}: {e}")
             return True
-        
-        # Handle COMMAND_RESULT from host
+
         elif msg_type == "COMMAND_RESULT":
             cmd = msg.payload.get('command', '')
             result = msg.payload.get('result', '')
-            
             print(f"\n[P2P] Command result for '{cmd}':\n{result}")
             if self.show_prompt:
                 sys.stdout.write(self.prompt)
                 sys.stdout.flush()
             return True
-            
+
         return False
-    
+
     def _input_listener(self):
-        """Listen for user input"""
         cmd_buffer = ""
         while self.running:
             try:
@@ -1127,20 +1106,20 @@ class SWMP2PNode:
                     import msvcrt
                     if msvcrt.kbhit():
                         char = msvcrt.getch()
-                        if char == b'\r':  # Enter
+                        if char == b'\r':
                             print()
                             self.show_prompt = False
-                            
+
                             if not cmd_buffer.strip():
-                                # Enter behavior depends on mode
                                 if self.role == "host" and self.interactive_mode and not self.continuous_mode:
-                                    # In interactive mode: advance one epoch
-                                    if self.world_runner:
+                                    if self.max_epoch_reached:
+                                        print(f"[MAX_EPOCH] Cannot advance beyond {self.max_epoch}.")
+                                    elif self.world_runner:
                                         self.world_runner._update_world()
                                         self._broadcast_to_peers()
                                         self._render()
+                                        self._check_max_epoch()
                                 else:
-                                    # Toggle pause mode
                                     self.pause_mode = not self.pause_mode
                                     if self.pause_mode:
                                         print("[P2P] PAUSE MODE enabled. Updates paused. Press Enter to resume.")
@@ -1149,13 +1128,13 @@ class SWMP2PNode:
                                         self._render(force=True)
                             else:
                                 self.command_queue.append(cmd_buffer.strip())
-                            
+
                             cmd_buffer = ""
                             self.show_prompt = True
                             if self.running:
                                 sys.stdout.write(self.prompt)
                                 sys.stdout.flush()
-                        elif char == b'\x08':  # Backspace
+                        elif char == b'\x08':
                             if cmd_buffer:
                                 cmd_buffer = cmd_buffer[:-1]
                                 sys.stdout.write('\b \b')
@@ -1175,13 +1154,16 @@ class SWMP2PNode:
                         if char == '\n' or char == '\r':
                             print()
                             self.show_prompt = False
-                            
+
                             if not cmd_buffer.strip():
                                 if self.role == "host" and self.interactive_mode and not self.continuous_mode:
-                                    if self.world_runner:
+                                    if self.max_epoch_reached:
+                                        print(f"[MAX_EPOCH] Cannot advance beyond {self.max_epoch}.")
+                                    elif self.world_runner:
                                         self.world_runner._update_world()
                                         self._broadcast_to_peers()
                                         self._render()
+                                        self._check_max_epoch()
                                 else:
                                     self.pause_mode = not self.pause_mode
                                     if self.pause_mode:
@@ -1191,7 +1173,7 @@ class SWMP2PNode:
                                         self._render(force=True)
                             else:
                                 self.command_queue.append(cmd_buffer.strip())
-                            
+
                             cmd_buffer = ""
                             self.show_prompt = True
                             if self.running:
@@ -1207,65 +1189,64 @@ class SWMP2PNode:
                             sys.stdout.write(char)
                             sys.stdout.flush()
                 time.sleep(0.01)
-            except:
+            except Exception:
                 time.sleep(0.1)
-    
+
     def start(self):
         self.running = True
-        
-        # Initialize world first
+
         if not self._initialize_world() and self.role == "join":
             print("[P2P] No world folder found. Waiting for sync from host...")
-        
-        # Register with signaling server
+
         registered = self.register_with_signaling(silent=False)
         if not registered and self.role == "host":
             print("[P2P] Warning: Could not register with signaling server. Make sure it's running.")
-        
+
         self.node_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.node_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.node_socket.bind((self.node_host, self.node_port))
         self.node_socket.listen(10)
         self.node_socket.setblocking(False)
-        
-        # Start input listener
+
         self.input_thread = threading.Thread(target=self._input_listener, daemon=True)
         self.input_thread.start()
-        
+
         print(f"[P2P] Node listening on port {self.node_port}")
-        
+
         if self.role == "host" and self.interactive_mode:
             print("[P2P] INTERACTIVE MODE: Press Enter for next epoch, 'c' for continuous")
             print("[P2P] Type 'help' for commands")
         else:
             print("[P2P] Press Enter to toggle PAUSE/LIVE mode, type 'help' for commands")
-        
+
         sys.stdout.write(self.prompt)
         sys.stdout.flush()
-        
-        # Show initial state
+
         if self.role == "host":
             self._render()
-        
+
         try:
             while self.running:
-                # Always accept connections first
                 self._accept_connections()
-                
-                # Sync with peers
                 self._sync_with_peers()
-                
+
                 if self.role == "host" and self.world_runner:
-                    # In interactive mode: only update when Enter is pressed (handled in input listener)
-                    # In dynamic or auto mode: update continuously
+                    if self.max_epoch_reached:
+                        print(f"\n[MAX_EPOCH] Host stopped at Epoch {self.world_runner.tick_count}.")
+                        self.running = False
+                        break
+
                     if not self.interactive_mode or self.continuous_mode:
                         self.world_runner._update_world()
                         self._render()
-                        
+
                         if self.world_runner.tick_count % self.broadcast_interval == 0:
                             self._broadcast_to_peers()
-                
-                # Process commands from input
+
+                        if self._check_max_epoch():
+                            self.running = False
+                            break
+
                 while self.command_queue:
                     cmd = self.command_queue.pop(0)
                     self.show_prompt = False
@@ -1274,24 +1255,29 @@ class SWMP2PNode:
                     if self.running:
                         sys.stdout.write(self.prompt)
                         sys.stdout.flush()
-                
-                # Sleep based on mode
+
+                    if self.max_epoch_reached:
+                        self.running = False
+                        break
+
+                if not self.running:
+                    break
+
                 if self.role == "host" and self.interactive_mode and not self.continuous_mode:
                     time.sleep(0.05)
                 else:
                     time.sleep(0.5)
-                
+
         except KeyboardInterrupt:
             print("\n[P2P] Shutting down...")
         finally:
             self._cleanup()
-    
+
     def _accept_connections(self):
         try:
             client_socket, addr = self.node_socket.accept()
             client_socket.settimeout(self.timeout)
-            
-            # Read all data
+
             data = b''
             while True:
                 try:
@@ -1303,30 +1289,30 @@ class SWMP2PNode:
                         break
                 except socket.timeout:
                     break
-            
+
             if data:
                 try:
                     msg = NetworkMessage.from_json(data.decode('utf-8'))
                     self._handle_peer_message(msg, client_socket)
-                except json.JSONDecodeError as e:
+                except json.JSONDecodeError:
                     pass
             client_socket.close()
         except (BlockingIOError, socket.timeout):
             pass
-        except Exception as e:
+        except Exception:
             pass
-    
+
     def _broadcast_to_peers(self):
         if not self.world_runner:
             return
-        
+
         ws = self.world_runner.world.world_states.to_dict()
         timers = ws.get('global_timers', {})
         epoch = timers.get('day_cycle', 0)
         chars = [c.to_dict() for c in self.world_runner.world.characters.get_all()]
         objs = [o.to_dict() for o in self.world_runner.world.objects.get_all()]
         events = self.world_runner.event_history[-10:]
-        
+
         msg = NetworkMessage("WORLD_STATE", {
             "epoch": epoch,
             "tick": self.world_runner.tick_count,
@@ -1335,7 +1321,7 @@ class SWMP2PNode:
             "objects": objs,
             "events": events
         }, sender=self.node_id)
-        
+
         for peer_id, peer_info in self.peers.items():
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -1343,29 +1329,27 @@ class SWMP2PNode:
                 sock.connect((peer_info['host'], peer_info['port']))
                 sock.sendall((msg.to_json() + '\n').encode('utf-8'))
                 sock.close()
-            except Exception as e:
+            except Exception:
                 pass
-    
+
     def _sync_with_peers(self):
         current_time = time.time()
         if current_time - self.last_sync < self.sync_interval:
             return
-        
+
         self.last_sync = current_time
-        
-        # Re-register to get updated peer list
         self.register_with_signaling(silent=True)
-        
+
         if self.role == "join" and self.peers:
             for peer_id, peer_info in self.peers.items():
                 try:
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     sock.settimeout(self.timeout)
                     sock.connect((peer_info['host'], peer_info['port']))
-                    
+
                     msg = NetworkMessage("REQUEST_WORLD", {}, sender=self.node_id)
                     sock.sendall((msg.to_json() + '\n').encode('utf-8'))
-                    
+
                     data = sock.recv(65536)
                     if data:
                         try:
@@ -1373,19 +1357,19 @@ class SWMP2PNode:
                             if response.type == "WORLD_STATE":
                                 self._handle_peer_message(response, sock)
                                 break
-                        except:
+                        except Exception:
                             pass
                     sock.close()
-                except Exception as e:
+                except Exception:
                     self.sync_attempts += 1
                     if self.sync_attempts > 5:
                         self.is_connected = False
                         self._render(force=True)
-                    pass
-    
+
     def _cleanup(self):
         if self.node_socket:
             self.node_socket.close()
+        self._save_all_on_exit()
         print(f"[P2P] Cleanup complete. Log saved to {os.path.join(self.world_folder, f'p2p_{self.node_id}.log')}")
         print(f"[P2P] Chat log saved to {self.chatlog_file}")
 
@@ -1399,14 +1383,16 @@ def main():
     parser.add_argument('--config', type=str, default='network_p2p_config.json', help='Config file')
     parser.add_argument('--interact', action='store_true', help='Interactive step-by-step mode (host only)')
     parser.add_argument('--dynamic', action='store_true', help='Dynamic mode: continuous with command input (host only)')
+    parser.add_argument('--max-epoch', type=int, default=10000,
+                        help='Maximum number of epochs before stopping/saving (default: 10000, 0=unlimited)')
     args = parser.parse_args()
-    
+
     role = "join" if args.join else "host"
-    
+
     print("="*60)
     print(f"SWM P2P NODE - {role.upper()}")
     print("="*60)
-    
+
     node = SWMP2PNode(config_file=args.config, role=role, args=args)
     node.start()
 
