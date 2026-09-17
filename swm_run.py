@@ -387,11 +387,13 @@ class WorldRunner:
             self.plotter = TimelinePlotter(self.world_folder)
             self.plotter.load_from_runtime(runtime_data)
             if (self.plotter.action_timeline or self.plotter.emotion_timeline
-                    or self.plotter.ai_state_timeline or self.plotter.goal_timeline):
+                    or self.plotter.ai_state_timeline or self.plotter.goal_timeline
+                    or self.plotter.status_timeline):
                 print(f"[OK] Loaded {len(self.plotter.action_timeline)} action, "
                       f"{len(self.plotter.emotion_timeline)} emotion, "
                       f"{len(self.plotter.ai_state_timeline)} AI state, "
-                      f"{len(self.plotter.goal_timeline)} goal entries")
+                      f"{len(self.plotter.goal_timeline)} goal, "
+                      f"{len(self.plotter.status_timeline)} status entries")
 
             print("[OK] Runtime state loaded successfully")
 
@@ -413,6 +415,7 @@ class WorldRunner:
                 "emotion_timeline": self.plotter.emotion_timeline[-1000:],
                 "ai_state_timeline": self.plotter.ai_state_timeline[-1000:],
                 "goal_timeline": self.plotter.goal_timeline[-1000:],
+                "status_timeline": self.plotter.status_timeline[-1000:],
                 "last_saved": datetime.now().isoformat()
             }
 
@@ -460,6 +463,11 @@ class WorldRunner:
                 'health_values': [],
                 'stamina_values': [],
                 'morale_values': [],
+                'hunger_values': [],
+                'thirst_values': [],
+                'energy_values': [],
+                'loyalty_values': [],
+                'trust_values': [],
                 'emotion_transitions': [],
                 'actions_taken': [],
                 'behavior_states': [],
@@ -502,6 +510,11 @@ class WorldRunner:
                 stats['health_values'].append(status.get('health', 50))
                 stats['stamina_values'].append(status.get('stamina', 50))
                 stats['morale_values'].append(status.get('morale', 50))
+                stats['hunger_values'].append(status.get('hunger', 0))
+                stats['thirst_values'].append(status.get('thirst', 0))
+                stats['energy_values'].append(status.get('energy', 0))
+                stats['loyalty_values'].append(status.get('loyalty', 0))
+                stats['trust_values'].append(status.get('trust', 0))
 
             stats['behavior_states'].append(char.get('ai_state', 'IDLE'))
 
@@ -522,6 +535,11 @@ class WorldRunner:
                     'Mean_Health', 'Std_Health',
                     'Mean_Stamina', 'Std_Stamina',
                     'Mean_Morale', 'Std_Morale',
+                    'Mean_Hunger', 'Std_Hunger',
+                    'Mean_Thirst', 'Std_Thirst',
+                    'Mean_Energy', 'Std_Energy',
+                    'Mean_Loyalty', 'Std_Loyalty',
+                    'Mean_Trust', 'Std_Trust',
                     'Emotion_Transitions',
                     'Actions_Taken',
                     'Movement_Count',
@@ -535,9 +553,12 @@ class WorldRunner:
                 for name, stats in self.statistics['characters'].items():
                     import statistics as stat
 
-                    health = stats['health_values']
-                    stamina = stats['stamina_values']
-                    morale = stats['morale_values']
+                    def _m(arr):
+                        return round(stat.mean(arr), 2) if arr else 'N/A'
+
+                    def _s(arr):
+                        return round(stat.stdev(arr), 2) if len(arr) > 1 else 'N/A'
+
                     emotions = stats['emotions_observed']
                     goals = stats['goals_observed']
 
@@ -546,12 +567,14 @@ class WorldRunner:
 
                     writer.writerow([
                         name,
-                        round(stat.mean(health), 2) if health else 'N/A',
-                        round(stat.stdev(health), 2) if len(health) > 1 else 'N/A',
-                        round(stat.mean(stamina), 2) if stamina else 'N/A',
-                        round(stat.stdev(stamina), 2) if len(stamina) > 1 else 'N/A',
-                        round(stat.mean(morale), 2) if morale else 'N/A',
-                        round(stat.stdev(morale), 2) if len(morale) > 1 else 'N/A',
+                        _m(stats['health_values']), _s(stats['health_values']),
+                        _m(stats['stamina_values']), _s(stats['stamina_values']),
+                        _m(stats['morale_values']), _s(stats['morale_values']),
+                        _m(stats['hunger_values']), _s(stats['hunger_values']),
+                        _m(stats['thirst_values']), _s(stats['thirst_values']),
+                        _m(stats['energy_values']), _s(stats['energy_values']),
+                        _m(stats['loyalty_values']), _s(stats['loyalty_values']),
+                        _m(stats['trust_values']), _s(stats['trust_values']),
                         len(stats['emotion_transitions']),
                         len(stats['actions_taken']),
                         stats['movement_count'],
@@ -572,27 +595,24 @@ class WorldRunner:
             lines.append("\\caption{Character Statistics Summary}")
             lines.append("\\label{tab:character_stats}")
             lines.append("\\begin{adjustbox}{width=\\columnwidth}")
-            lines.append("\\begin{tabular}{|l|c|c|c|c|c|}")
+            lines.append("\\begin{tabular}{|l|c|c|c|c|c|c|}")
             lines.append("\\hline")
-            lines.append("\\textbf{Character} & \\textbf{Health} & \\textbf{Stamina} & \\textbf{Most Common State} & \\textbf{Most Common Emotion} & \\textbf{Most Common Goal} \\\\")
+            lines.append("\\textbf{Character} & \\textbf{Health} & \\textbf{Stamina} & \\textbf{Morale} & \\textbf{Hunger} & \\textbf{Thirst} & \\textbf{Most Common State} \\\\")
             lines.append("\\hline")
 
             for name, stats in self.statistics['characters'].items():
                 import statistics as stat
 
-                health = stats['health_values']
-                stamina = stats['stamina_values']
-                emotions = stats['emotions_observed']
-                goals = stats['goals_observed']
-
-                health_str = f"{stat.mean(health):.1f}" if health else "N/A"
-                stamina_str = f"{stat.mean(stamina):.1f}" if stamina else "N/A"
+                def _m(arr):
+                    return f"{stat.mean(arr):.1f}" if arr else "N/A"
 
                 most_common_state = max(set(stats['behavior_states']), key=stats['behavior_states'].count) if stats['behavior_states'] else 'N/A'
-                most_common_emotion = max(set(emotions), key=emotions.count) if emotions else 'N/A'
-                most_common_goal = max(set(goals), key=goals.count) if goals else 'N/A'
 
-                lines.append(f"{name} & {health_str} & {stamina_str} & {most_common_state} & {most_common_emotion} & {most_common_goal} \\\\")
+                lines.append(
+                    f"{name} & {_m(stats['health_values'])} & {_m(stats['stamina_values'])} & "
+                    f"{_m(stats['morale_values'])} & {_m(stats['hunger_values'])} & "
+                    f"{_m(stats['thirst_values'])} & {most_common_state} \\\\"
+                )
 
             lines.append("\\hline")
             lines.append("\\end{tabular}")
@@ -707,9 +727,8 @@ class WorldRunner:
                 )
             # Always decay emotion each tick
             self.world.emotion_manager.tick_emotion_decay(char, self.tick_count)
-            #current_emotion = self.world.get_character_emotion(char)
             
-            # Track emotion / ai_state / goal timelines
+            # Track emotion / ai_state / goal / status timelines
             name = char.get('name', 'Unknown')
             current_emotion = self.world.get_character_emotion(char) if hasattr(self.world, 'get_character_emotion') else 'neutral'
             current_ai_state = char.get('ai_state', 'IDLE')
@@ -739,11 +758,18 @@ class WorldRunner:
                 )
                 self.last_goal_per_char[name] = current_goal
 
+            # Status snapshot (health, stamina, morale, hunger, thirst, ...)
+            status_vars = char.get('status_variables', {}) or {}
+            self.plotter.add_status_entry(
+                self.tick_count, name, status_vars,
+                ai_state=current_ai_state,
+                emotion=current_emotion,
+            )
+
             # Emotion transition tracking
             if name in self.emotion_history:
                 if self.emotion_history[name] is not None and self.emotion_history[name] != current_emotion:
                     if name in self.statistics['characters']:
-                        # Detect emotion change
                         prev = self.emotion_history.get(name)
                         if prev and prev != current_emotion:
                             self.statistics['characters'][name]['emotion_transitions'].append(
@@ -1422,30 +1448,27 @@ class WorldRunner:
         ai_state = char.get('ai_state', 'IDLE').upper()
         prev_ai_state = char.get('_prev_ai_state', ai_state)
         
-        # 1. State transitions
         if prev_ai_state != ai_state:
             if ai_state in ('FLEEING', 'FLEE'):
                 events.append('threat_detected')
             elif ai_state == 'COMBAT' and status.get('health', 100) < 40:
-                events.append('goal_blocked')  # can't win
+                events.append('goal_blocked')
             elif ai_state == 'REST':
-                events.append('loss_experienced')  # losing time
+                events.append('loss_experienced')
             elif ai_state in ('SOCIALIZE', 'SHARE'):
-                events.append('goal_achieved')  # social goal met
+                events.append('goal_achieved')
             elif ai_state in ('EXPLORE', 'SEARCHING'):
                 events.append('novelty_detected')
             elif ai_state == 'GATHER':
                 events.append('goal_achieved')
         
-        # 2. Resource / status events
         if status.get('health', 100) < 30:
             events.append('threat_detected')
         if status.get('stamina', 100) < 20:
             events.append('loss_experienced')
         if status.get('hunger', 0) > 80 or status.get('thirst', 0) > 80:
-            events.append('goal_blocked')  # survival blocked
+            events.append('goal_blocked')
         
-        # 3. Random events during tick (10% chance)
         if random.random() < 0.10:
             events.append(random.choice([
                 'novelty_detected', 'goal_achieved', 'goal_blocked',

@@ -491,6 +491,37 @@ def main():
     print("[OK] All emotion tests completed")
     print("="*70)
 
+    # Test 6: Temporal persistence and decay
+    print("\n" + "-"*70)
+    print("TEST 6: Temporal Persistence and Decay")
+    print("-"*70)
 
+    char.set('status_variables', {
+        'health': 50, 'stamina': 50,
+        'current_emotion': 'neutral', 'morale': 50
+    })
+    char.set('memory_perception', {
+        'reasoning_stack': {
+            'emotional_state': 'neutral',
+            'emotion_intensity': 0.5,
+            'emotional_memory': []
+        }
+    })
+
+    # Assign a strong emotion at tick 0 with a 40-tick lifetime
+    emotion_manager._current_tick = 0
+    emotion_manager.set_character_emotion(char, 'joy', 0.67, duration_ticks=40)
+    print(f"  t=0  | Set joy (intensity 0.67, expires_at=40)")
+
+    # Advance the clock and decay every tick, no new stimuli
+    for tick in range(1, 61):
+        emotion_manager.tick_emotion_decay(char, tick)
+        if tick in (5, 10, 20, 30, 40, 41, 42, 43, 44, 45, 50, 60):
+            status = char.get('status_variables', {})
+            em = status.get('current_emotion', '?')
+            inten = status.get('emotion_intensity', 0)
+            exp = status.get('emotion_expires_at', 0)
+            print(f"  t={tick:2} | emotion={em:8} intensity={inten:.2f} expires_at={exp}")
+        
 if __name__ == "__main__":
     main()
