@@ -87,7 +87,7 @@ python swm_run_agent_p2p.py --host --new --world world_p2p --chat_style "creepy 
 ```
 python swm_run_agent_p2p.py --join --world world_p2p --chat_style "funny and descriptive" --agent_chat_frequency 3 --config network_p2p_join_config.json
 ```
-### Multiple Worlds Analysis
+## Multiple Worlds Analysis
 You can either run through Linux/MAC the script `run_worlds.sh` or in Windows `run_worlds.bat` to generate and run distinct instances of world simulations (the number of worlds and number of characters are parameterized. See here creating 10 worlds of 8 characters each.
 ```
 sh run_worlds.sh 10 8
