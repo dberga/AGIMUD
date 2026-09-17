@@ -10,13 +10,13 @@ Then edit `world_vocabulary.json`, `generation_config.json`, `world_dynamics.jso
 
 Run the following commands
 ```
-python swm_generate.py
+python swm_generate.py --folder world_sample --characters 8
 ```
 This will generate several jsons (`characters.json`, `objects.json`, `rules.json`, `scenes.json`, `world_states.json`, `action_catalog.json`, `condition_registry.json`, `character_graph.json` and concatenating all the info in `knowledge_base.json` ) that will be exported in `world_X-Y/` where X-Y is the date of the generation.
 
-Then run this to execute the simulated world:
+Then run this to execute a new simulated world (note: remove --new to continue an existing session):
 ```
-python swm_run.py --new
+python swm_run.py --new --world world_sample 
 ```
 This will create a new world, it will export in the world_X-Y folder the `world_state_runtime.json` and the text log `run_X-Y.txt` with all the events and visualization epochs.
 You can reload the world state by discarting the `--new` flag when running the server again.
@@ -76,16 +76,16 @@ You can reload the world state by discarting the `--new` flag when running the p
 ### Agent Clients and Peers
 This section is a buildup of agents that interact with the world runners (as in a MUD), being able to chat describing what is going on, and request setting actions and variables for characters.
 
-Create an agent instance using the submodule [LM Studio Python Wrapper](https://github.com/dberga/lmstudio-python-wrapper) and let it join a SWM Server session, with many parameters such as chat style "dramatic", "funny", etc.; selected AI model to load, temperature, agent chat frequency, MCP selection, and character in case of roleplaying as a specific character. See this example:
+Create an agent instance using the submodule [LM Studio Python Wrapper](https://github.com/dberga/lmstudio-python-wrapper) and let it join a SWM Server session, with many parameters such as chat narrative style "dramatic", "funny"..., the selected AI model to load, model temperature, agent chat frequency, MCP selection, and other variables such as character selection in case of roleplaying as a specific character. Also a flag to enable the agent to set actions and variables using the chat parser helper.
 ```
-python swm_run_agent_client.py --chat_style "dramatic" --actions_enabled
+python swm_run_agent_client.py --chat_style "dramatic"
 ```
 For the case of P2P, an agent can be run as host or as joiner:
 ```
-python swm_run_agent_p2p.py --host
+python swm_run_agent_p2p.py --host --new --world world_p2p --chat_style "creepy narration from a GM" --agent_chat_frequency 10 --actions_enabled
 ```
 ```
-python swm_run_agent_p2p.py --join
+python swm_run_agent_p2p.py --join --world world_p2p --chat_style "funny and descriptive" --agent_chat_frequency 3 --config network_p2p_join_config.json
 ```
 ### Multiple Worlds Analysis
 You can either run through Linux/MAC the script `run_worlds.sh` or in Windows `run_worlds.bat` to generate and run distinct instances of world simulations (the number of worlds and number of characters are parameterized. See here creating 10 worlds of 8 characters each.
