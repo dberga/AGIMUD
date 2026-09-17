@@ -24,11 +24,15 @@ You can reload the world state by discarting the `--new` flag when running the s
 
 Then, to quit and save your world, press Ctrl+C
 
-## Social Reasoning Methods
+## Social Reasoning and Affective Methods
 
 To run the theories of mind, check (and modify as needed) the `reasoning_tests.json` and run tests with:
 ```
 python swm_reason.py
+```
+To run emotion tests, check (and modify as needed) the `emotion_tests.json` and run the tests with:
+```
+python swm_emotion.py
 ```
 The `swm.py` and `swm_run.py` world simulations runs epochs including the integration and analysis of behavior, values, governance and belief motors, as well as emotions, goals and action rules.
 
