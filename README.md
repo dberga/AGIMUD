@@ -6,25 +6,54 @@ For editing your world characters, objects and scene names, modify `objects_name
 
 Then edit `world_vocabulary.json`, `generation_config.json`, `world_dynamics.json` to change the world and assets mechanics.
 
-## Generate and Simulate Worlds
+## Generate and Run Simulated Worlds
 
+### World Generation
 Run the following commands
 ```
 python swm_generate.py --folder world_sample --characters 8
 ```
 This will generate several jsons (`characters.json`, `objects.json`, `rules.json`, `scenes.json`, `world_states.json`, `action_catalog.json`, `condition_registry.json`, `character_graph.json` and concatenating all the info in `knowledge_base.json` ) that will be exported in `world_X-Y/` where X-Y is the date of the generation.
 
+### World Runner
 Then run this to execute a new simulated world (note: remove --new to continue an existing session):
 ```
 python swm_run.py --new --world world_sample 
 ```
-This will create a new world, it will export in the world_X-Y folder the `world_state_runtime.json` and the text log `run_X-Y.txt` with all the events and visualization epochs.
-You can reload the world state by discarting the `--new` flag when running the server again.
+This will create a new world, it will export in the world_X-Y folder the `world_state_runtime.json` and the text log `run_X-Y.txt` with all the events and visualization epochs. Note: You can reload the world state by discarting the `--new` flag when running the server again.
 
+Then, to quit and save your world, press Ctrl+C.
 
-Then, to quit and save your world, press Ctrl+C
+### Interactive Mode
+Add the flag "--interact" to execute the runner's epochs step by step. 
+```
+python swm_run.py --world world_sample --interact
+```
+Here are the terminal parsed commands (same as for clients, see network section):
+```
+============================================================
+SWM INTERACTIVE COMMANDS
+============================================================
+  [Enter]              - Toggle PAUSE/LIVE mode
+  help                 - Show this help menu
+  summary              - Request world summary from server
+  catalog              - List available actions in catalog
+  var                  - List available variables
+  list                 - List characters, objects and scenes
+  action <Name> <ACTION> - Force character action intent
+  set char <Name> <var> <val> - Modify character status/vars
+  set world <key> <val> - Modify global world state
+  save                 - Save current world state on server
+  mode                 - Show current server mode
+  chat <message>       - Send a chat message to all clients
+  history              - Request the most recent run log
+  chatlog              - Request the chat history
+  resume               - Resume updates (exit pause mode)
+  q / quit / exit      - Disconnect and exit
+============================================================
+```
 
-## Social Reasoning and Affective Methods
+## Social Reasoning and Affective Methods (ToM + Emotion Tests)
 
 To run the theories of mind, check (and modify as needed) the `reasoning_tests.json` and run tests with:
 ```
