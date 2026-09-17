@@ -9,22 +9,14 @@ Reads a set of world folders, aggregates timelines, and produces:
     - Comparative line plots over time (one line per world)
     - Comparative entropy / dominant-share line plots (replaces flat line plots)
     - Comparative line plots per category (subplots per world)
-    - Box plots of per-character metrics across worlds
+    - Box plots of per-character metrics across worlds (dynamic: all status vars)
     - Dynamics of status variables over time (line plots + box plots)
     - Pearson + Spearman correlation matrix (per-character metrics)
-    - Status x Activity correlation matrix (Pearson + Spearman, per world too)
+    - Status x Activity correlation matrix (dynamic: all status vars present)
     - Scatter plots status vs activity
-    - Cross-world occurrence / co-occurrence matrices:
-        * aggregated (raw counts, row-normalized, col-normalized)
-        * per-world long-format CSV
-        * aggregated heatmaps + small-multiple per-world heatmaps
+    - Cross-world occurrence / co-occurrence matrices
     - Cohen's d effect sizes between worlds
-    - Statistical pipeline per variable:
-        1. Normality (Shapiro-Wilk, or D'Agostino-Pearson fallback)
-        2. Homogeneity of variance (Levene)
-        3. Omnibus: ANOVA / Welch / Kruskal-Wallis
-        4. Post-hoc: Tukey HSD / Games-Howell / Dunn + Holm-Bonferroni
-        5. Effect sizes: eta^2 (parametric), epsilon^2 (non-parametric)
+    - Statistical pipeline per variable
     - All tables in CSV and LaTeX.
     - Full console output mirrored to analysis.txt
 
@@ -72,7 +64,6 @@ try:
     from swm_plots import (
         TimelinePlotter, HAS_MATPLOTLIB,
         TIMELINE_MAP, MATRIX_SPECS,
-        STATUS_VARS, ACTIVITY_VARS,
         safe_set_style,
         plot_comparative_grouped_bars,
         plot_comparative_lineplot_over_time,
@@ -99,6 +90,17 @@ if HAS_MATPLOTLIB:
 else:
     print("[ERROR] matplotlib is required for swm_analyze.py")
     sys.exit(1)
+
+
+# ============================================================
+# DEFAULT ACTIVITY VARS (status vars are discovered dynamically)
+# ============================================================
+
+# These are the "activity" side of the status × activity correlations.
+ACTIVITY_VARS = ['Actions_Total', 'Emotions_Total', 'Goals_Total', 'AI_States_Total',
+                 'Distinct_Emotions', 'Distinct_Goals', 'Distinct_AI_States',
+                 'Emotion_Transitions', 'Emotion_Entropy', 'Goal_Entropy',
+                 'AI_State_Entropy']
 
 
 # ============================================================
@@ -129,8 +131,6 @@ class _Tee:
 
 
 def start_logging(out_dir: str):
-    """Redirect sys.stdout to a tee that also writes analysis.txt.
-    Returns the open file handle (must be closed at the end)."""
     os.makedirs(out_dir, exist_ok=True)
     log_path = os.path.join(out_dir, "analysis.txt")
     log_file = open(log_path, "w", encoding="utf-8")
@@ -214,17 +214,24 @@ class WorldAggregate:
         self.per_char_emotions: Dict[str, int] = {}
         self.per_char_goals: Dict[str, int] = {}
         self.per_char_ai_states: Dict[str, int] = {}
+        self.per_char_emotion_transitions: Dict[str, int] = {}
+
+        # Canonical status attributes (kept for backwards compatibility)
         self.per_char_health: Dict[str, float] = {}
         self.per_char_stamina: Dict[str, float] = {}
         self.per_char_morale: Dict[str, float] = {}
-        self.per_char_emotion_transitions: Dict[str, int] = {}
+
+        # NEW: generic per-status dict. Key = status name WITHOUT "Mean_" prefix,
+        # e.g. "Health", "Stamina", "Morale", "Hunger", "Thirst", "Energy",
+        # "Loyalty", "Trust".
+        self.per_char_status: Dict[str, Dict[str, float]] = {}
 
         # Totals per character (not distinct)
         self.per_char_emotions_total: Dict[str, int] = {}
         self.per_char_goals_total: Dict[str, int] = {}
         self.per_char_ai_states_total: Dict[str, int] = {}
 
-        # NEW: entropy per character (replaces Distinct_* when zero-variance)
+        # Entropy per character
         self.per_char_emotion_entropy: Dict[str, float] = {}
         self.per_char_goal_entropy: Dict[str, float] = {}
         self.per_char_ai_state_entropy: Dict[str, float] = {}
@@ -244,7 +251,7 @@ class WorldAggregate:
             self.action_counts[act] += 1
             self.per_char_actions[char] = self.per_char_actions.get(char, 0) + 1
 
-        # Emotions: distinct + total + per-character counts for entropy
+        # Emotions
         char_emotions_distinct: Dict[str, set] = defaultdict(set)
         char_emotions_total: Dict[str, int] = defaultdict(int)
         char_emotion_counts: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
@@ -262,7 +269,7 @@ class WorldAggregate:
         for char, counts in char_emotion_counts.items():
             self.per_char_emotion_entropy[char] = _entropy_from_counts(dict(counts))
 
-        # Goals: distinct + total + entropy
+        # Goals
         char_goals_distinct: Dict[str, set] = defaultdict(set)
         char_goals_total: Dict[str, int] = defaultdict(int)
         char_goal_counts: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
@@ -280,7 +287,7 @@ class WorldAggregate:
         for char, counts in char_goal_counts.items():
             self.per_char_goal_entropy[char] = _entropy_from_counts(dict(counts))
 
-        # AI states: distinct + total + entropy
+        # AI states
         char_ai_states_distinct: Dict[str, set] = defaultdict(set)
         char_ai_states_total: Dict[str, int] = defaultdict(int)
         char_ai_counts: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
@@ -308,26 +315,38 @@ class WorldAggregate:
         return True
 
     def _load_statistics_csv(self, stats_path: str):
+        """Load statistics.csv. Dynamically reads every Mean_X / Std_X column.
+
+        Populates self.per_char_status[X][character] = Mean_X value, and also
+        keeps the three canonical attributes (health/stamina/morale).
+        """
         try:
             with open(stats_path, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     name = row.get('Character') or row.get('character') or 'Unknown'
                     try:
-                        health = float(row.get('Mean_Health') or 0)
-                        stamina = float(row.get('Mean_Stamina') or 0)
-                        morale = float(row.get('Mean_Morale') or 0)
                         transitions = int(float(row.get('Emotion_Transitions') or 0))
                     except (ValueError, TypeError):
-                        continue
-                    if health:
-                        self.per_char_health[name] = health
-                    if stamina:
-                        self.per_char_stamina[name] = stamina
-                    if morale:
-                        self.per_char_morale[name] = morale
+                        transitions = 0
                     self.per_char_emotion_transitions[name] = transitions
                     self.character_stats[name] = dict(row)
+
+                    for k, v in row.items():
+                        if not k or not k.startswith('Mean_'):
+                            continue
+                        var = k[len('Mean_'):]  # "Health", "Stamina", ...
+                        try:
+                            val = float(v)
+                        except (ValueError, TypeError):
+                            continue
+                        self.per_char_status.setdefault(var, {})[name] = val
+                        if var == 'Health':
+                            self.per_char_health[name] = val
+                        elif var == 'Stamina':
+                            self.per_char_stamina[name] = val
+                        elif var == 'Morale':
+                            self.per_char_morale[name] = val
         except Exception as e:
             print(f"[WARN] Could not load statistics.csv from {self.world_path}: {e}")
 
@@ -357,6 +376,21 @@ def _latex_escape(s: str) -> str:
                    .replace('#', '\\#')
                    .replace('{', '\\{')
                    .replace('}', '\\}'))
+
+
+def _safe_attr_name(status_var: str) -> str:
+    """Attribute name used to expose a per_char_status dict as agg.<attr>."""
+    return f'per_char_status_{status_var.lower()}'
+
+
+def _discover_status_vars(aggregates: List['WorldAggregate']) -> List[str]:
+    """Union of every status variable found in any world's statistics.csv."""
+    found = set()
+    for agg in aggregates:
+        for var, d in agg.per_char_status.items():
+            if d and any(v is not None for v in d.values()):
+                found.add(var)
+    return sorted(found)
 
 
 # ============================================================
@@ -881,11 +915,22 @@ def epsilon_squared_kruskal(H: float, N: int) -> float:
 # PER-CHARACTER VARIABLE COLLECTION
 # ============================================================
 
-def _collect_world_variable_values(aggregates: List[WorldAggregate]):
+def _collect_world_variable_values(aggregates: List[WorldAggregate],
+                                   extra_status_vars: Optional[List[str]] = None):
+    """Return (variables, per_world_values).
+
+    extra_status_vars is a list like ['Mean_Hunger', 'Mean_Thirst', ...].
+    They get appended to the standard variable list, and are read from the
+    per_char_status dicts.
+    """
     variables = ['Mean_Health', 'Mean_Stamina', 'Mean_Morale',
                  'Actions_Total', 'Distinct_Emotions', 'Distinct_Goals',
                  'Distinct_AI_States', 'Emotion_Transitions',
                  'Emotion_Entropy', 'Goal_Entropy', 'AI_State_Entropy']
+    if extra_status_vars:
+        for v in extra_status_vars:
+            if v not in variables:
+                variables.append(v)
 
     per_world: Dict[str, Dict[str, List[float]]] = {}
     for agg in aggregates:
@@ -902,11 +947,14 @@ def _collect_world_variable_values(aggregates: List[WorldAggregate]):
         names.update(agg.per_char_emotion_entropy.keys())
         names.update(agg.per_char_goal_entropy.keys())
         names.update(agg.per_char_ai_state_entropy.keys())
+        for var, dd in agg.per_char_status.items():
+            names.update(dd.keys())
+
         for name in names:
             row = {
-                'Mean_Health': agg.per_char_health.get(name),
-                'Mean_Stamina': agg.per_char_stamina.get(name),
-                'Mean_Morale': agg.per_char_morale.get(name),
+                'Mean_Health': agg.per_char_status.get('Health', {}).get(name),
+                'Mean_Stamina': agg.per_char_status.get('Stamina', {}).get(name),
+                'Mean_Morale': agg.per_char_status.get('Morale', {}).get(name),
                 'Actions_Total': agg.per_char_actions.get(name, 0),
                 'Distinct_Emotions': agg.per_char_emotions.get(name, 0),
                 'Distinct_Goals': agg.per_char_goals.get(name, 0),
@@ -916,8 +964,11 @@ def _collect_world_variable_values(aggregates: List[WorldAggregate]):
                 'Goal_Entropy': agg.per_char_goal_entropy.get(name),
                 'AI_State_Entropy': agg.per_char_ai_state_entropy.get(name),
             }
+            for v in (extra_status_vars or []):
+                var = v.replace('Mean_', '')
+                row[v] = agg.per_char_status.get(var, {}).get(name)
             for v in variables:
-                if row[v] is not None:
+                if row.get(v) is not None:
                     d[v].append(float(row[v]))
         per_world[agg.world_name] = d
     return variables, per_world
@@ -927,8 +978,9 @@ def _collect_world_variable_values(aggregates: List[WorldAggregate]):
 # STATISTICAL PIPELINE
 # ============================================================
 
-def run_statistical_pipeline(aggregates: List[WorldAggregate]) -> List[Dict[str, Any]]:
-    variables, per_world = _collect_world_variable_values(aggregates)
+def run_statistical_pipeline(aggregates: List[WorldAggregate],
+                             extra_status_vars: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    variables, per_world = _collect_world_variable_values(aggregates, extra_status_vars)
     world_names = list(per_world.keys())
 
     results = []
@@ -942,7 +994,6 @@ def run_statistical_pipeline(aggregates: List[WorldAggregate]) -> List[Dict[str,
                             'reason': 'not enough groups with n>=2'})
             continue
 
-        # NEW: skip variables with essentially zero variance across all data
         all_vals = [x for g in groups for x in g]
         if all_vals:
             mu = sum(all_vals) / len(all_vals)
@@ -1188,10 +1239,6 @@ def write_statistical_pipeline_posthoc_latex(results, out_path):
 # ============================================================
 
 def generate_per_world_plots(aggregates: List[WorldAggregate], out_root: str):
-    """
-    For each world, generate all the individual timeline charts that
-    swm_plots.py produces, but saved into <out>/per_world/<world_name>/.
-    """
     for agg in aggregates:
         if not agg.plotter:
             continue
@@ -1236,22 +1283,23 @@ def write_comparative_counts_csv(aggregates, field, out_path):
 def write_per_character_metrics_csv(aggregates, out_path):
     with open(out_path, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(['World', 'Character',
-                         'Actions_Total', 'Distinct_Emotions', 'Distinct_Goals',
-                         'Distinct_AI_States',
-                         'Emotions_Total', 'Goals_Total', 'AI_States_Total',
-                         'Emotion_Entropy', 'Goal_Entropy', 'AI_State_Entropy',
-                         'Mean_Health', 'Mean_Stamina', 'Mean_Morale',
-                         'Emotion_Transitions'])
+        # Dynamic header: base metrics + every status var found
+        status_vars = _discover_status_vars(aggregates)
+        header = ['World', 'Character',
+                  'Actions_Total', 'Distinct_Emotions', 'Distinct_Goals',
+                  'Distinct_AI_States',
+                  'Emotions_Total', 'Goals_Total', 'AI_States_Total',
+                  'Emotion_Entropy', 'Goal_Entropy', 'AI_State_Entropy']
+        header += [f'Mean_{v}' for v in status_vars]
+        header += ['Emotion_Transitions']
+        writer.writerow(header)
+
         for agg in aggregates:
             names = set()
             names.update(agg.per_char_actions.keys())
             names.update(agg.per_char_emotions.keys())
             names.update(agg.per_char_goals.keys())
             names.update(agg.per_char_ai_states.keys())
-            names.update(agg.per_char_health.keys())
-            names.update(agg.per_char_stamina.keys())
-            names.update(agg.per_char_morale.keys())
             names.update(agg.per_char_emotion_transitions.keys())
             names.update(agg.per_char_emotions_total.keys())
             names.update(agg.per_char_goals_total.keys())
@@ -1259,8 +1307,11 @@ def write_per_character_metrics_csv(aggregates, out_path):
             names.update(agg.per_char_emotion_entropy.keys())
             names.update(agg.per_char_goal_entropy.keys())
             names.update(agg.per_char_ai_state_entropy.keys())
+            for var, d in agg.per_char_status.items():
+                names.update(d.keys())
+
             for name in sorted(names):
-                writer.writerow([
+                row = [
                     agg.world_name, name,
                     agg.per_char_actions.get(name, 0),
                     agg.per_char_emotions.get(name, 0),
@@ -1272,28 +1323,34 @@ def write_per_character_metrics_csv(aggregates, out_path):
                     round(agg.per_char_emotion_entropy.get(name, 0.0), 4),
                     round(agg.per_char_goal_entropy.get(name, 0.0), 4),
                     round(agg.per_char_ai_state_entropy.get(name, 0.0), 4),
-                    round(agg.per_char_health.get(name, 0.0), 2),
-                    round(agg.per_char_stamina.get(name, 0.0), 2),
-                    round(agg.per_char_morale.get(name, 0.0), 2),
-                    agg.per_char_emotion_transitions.get(name, 0)])
+                ]
+                for var in status_vars:
+                    val = agg.per_char_status.get(var, {}).get(name, 0.0)
+                    row.append(round(float(val), 2))
+                row.append(agg.per_char_emotion_transitions.get(name, 0))
+                writer.writerow(row)
     print(f"[CSV]   {out_path}")
 
 
 def write_comparative_summary_csv(aggregates, out_path):
+    status_vars = _discover_status_vars(aggregates)
     with open(out_path, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(['World', 'Total_Actions', 'Total_Emotions', 'Total_Goals',
-                         'Total_AI_States',
-                         'Distinct_Actions', 'Distinct_Emotions', 'Distinct_Goals',
-                         'Distinct_AI_States',
-                         'Mean_Health', 'Mean_Stamina', 'Mean_Morale',
-                         'Mean_Emotion_Transitions', 'Mean_Emotion_Entropy',
-                         'Mean_Goal_Entropy', 'Mean_AI_State_Entropy'])
+        header = ['World', 'Total_Actions', 'Total_Emotions', 'Total_Goals',
+                  'Total_AI_States',
+                  'Distinct_Actions', 'Distinct_Emotions', 'Distinct_Goals',
+                  'Distinct_AI_States']
+        header += [f'Mean_{v}' for v in status_vars]
+        header += ['Mean_Emotion_Transitions', 'Mean_Emotion_Entropy',
+                   'Mean_Goal_Entropy', 'Mean_AI_State_Entropy']
+        writer.writerow(header)
+
         for agg in aggregates:
             def _m(d):
                 vals = list(d.values())
                 return round(sum(vals) / len(vals), 2) if vals else 0.0
-            writer.writerow([
+
+            row = [
                 agg.world_name,
                 sum(agg.action_counts.values()),
                 sum(agg.emotion_counts.values()),
@@ -1301,10 +1358,16 @@ def write_comparative_summary_csv(aggregates, out_path):
                 sum(agg.ai_state_counts.values()),
                 len(agg.action_counts), len(agg.emotion_counts),
                 len(agg.goal_counts), len(agg.ai_state_counts),
-                _m(agg.per_char_health), _m(agg.per_char_stamina),
-                _m(agg.per_char_morale), _m(agg.per_char_emotion_transitions),
-                _m(agg.per_char_emotion_entropy), _m(agg.per_char_goal_entropy),
-                _m(agg.per_char_ai_state_entropy)])
+            ]
+            for var in status_vars:
+                row.append(_m(agg.per_char_status.get(var, {})))
+            row += [
+                _m(agg.per_char_emotion_transitions),
+                _m(agg.per_char_emotion_entropy),
+                _m(agg.per_char_goal_entropy),
+                _m(agg.per_char_ai_state_entropy),
+            ]
+            writer.writerow(row)
     print(f"[CSV]   {out_path}")
 
 
@@ -1495,11 +1558,15 @@ def spearman_correlation(xs, ys):
     return pearson_correlation(rx, ry)
 
 
-def build_per_character_matrix(aggregates):
+def build_per_character_matrix(aggregates, status_vars: List[str]):
     variables = ['Mean_Health', 'Mean_Stamina', 'Mean_Morale',
                  'Actions_Total', 'Distinct_Emotions', 'Distinct_Goals',
                  'Distinct_AI_States', 'Emotion_Transitions',
                  'Emotion_Entropy', 'Goal_Entropy', 'AI_State_Entropy']
+    for v in status_vars:
+        if v not in variables:
+            variables.append(v)
+
     rows = []
     for agg in aggregates:
         names = set()
@@ -1507,19 +1574,19 @@ def build_per_character_matrix(aggregates):
         names.update(agg.per_char_emotions.keys())
         names.update(agg.per_char_goals.keys())
         names.update(agg.per_char_ai_states.keys())
-        names.update(agg.per_char_health.keys())
-        names.update(agg.per_char_stamina.keys())
-        names.update(agg.per_char_morale.keys())
         names.update(agg.per_char_emotion_transitions.keys())
         names.update(agg.per_char_emotion_entropy.keys())
         names.update(agg.per_char_goal_entropy.keys())
         names.update(agg.per_char_ai_state_entropy.keys())
+        for var, d in agg.per_char_status.items():
+            names.update(d.keys())
+
         for name in names:
             row = {
                 'World': agg.world_name, 'Character': name,
-                'Mean_Health': agg.per_char_health.get(name),
-                'Mean_Stamina': agg.per_char_stamina.get(name),
-                'Mean_Morale': agg.per_char_morale.get(name),
+                'Mean_Health': agg.per_char_status.get('Health', {}).get(name),
+                'Mean_Stamina': agg.per_char_status.get('Stamina', {}).get(name),
+                'Mean_Morale': agg.per_char_status.get('Morale', {}).get(name),
                 'Actions_Total': agg.per_char_actions.get(name, 0),
                 'Distinct_Emotions': agg.per_char_emotions.get(name, 0),
                 'Distinct_Goals': agg.per_char_goals.get(name, 0),
@@ -1529,6 +1596,9 @@ def build_per_character_matrix(aggregates):
                 'Goal_Entropy': agg.per_char_goal_entropy.get(name),
                 'AI_State_Entropy': agg.per_char_ai_state_entropy.get(name),
             }
+            for v in status_vars:
+                var = v.replace('Mean_', '')
+                row[v] = agg.per_char_status.get(var, {}).get(name)
             if all(row.get(v) is not None for v in variables):
                 rows.append(row)
     columns = {v: [] for v in variables}
@@ -1606,17 +1676,17 @@ def write_correlation_latex(variables, matrix, out_path):
 
 
 # ============================================================
-# STATUS x ACTIVITY CORRELATION
+# STATUS x ACTIVITY CORRELATION (DYNAMIC)
 # ============================================================
 
-def build_status_activity_rows(aggregates) -> List[Dict[str, Any]]:
-    """Per-character rows containing status + activity metrics."""
+def build_status_activity_rows(aggregates, status_vars: List[str]) -> List[Dict[str, Any]]:
+    """Per-character rows containing status + activity metrics.
+
+    status_vars is a list like ['Mean_Health', 'Mean_Hunger', ...].
+    """
     rows = []
     for agg in aggregates:
         names = set()
-        names.update(agg.per_char_health.keys())
-        names.update(agg.per_char_stamina.keys())
-        names.update(agg.per_char_morale.keys())
         names.update(agg.per_char_actions.keys())
         names.update(agg.per_char_emotions_total.keys())
         names.update(agg.per_char_goals_total.keys())
@@ -1624,18 +1694,20 @@ def build_status_activity_rows(aggregates) -> List[Dict[str, Any]]:
         names.update(agg.per_char_emotion_entropy.keys())
         names.update(agg.per_char_goal_entropy.keys())
         names.update(agg.per_char_ai_state_entropy.keys())
+        for var, d in agg.per_char_status.items():
+            names.update(d.keys())
 
         for name in names:
-            if (name not in agg.per_char_health
-                    and name not in agg.per_char_stamina
-                    and name not in agg.per_char_morale):
+            # keep only characters that have at least one status value
+            has_status = any(
+                name in agg.per_char_status.get(v.replace('Mean_', ''), {})
+                for v in status_vars
+            )
+            if not has_status:
                 continue
-            rows.append({
+            row = {
                 'World': agg.world_name,
                 'Character': name,
-                'Mean_Health': agg.per_char_health.get(name),
-                'Mean_Stamina': agg.per_char_stamina.get(name),
-                'Mean_Morale': agg.per_char_morale.get(name),
                 'Actions_Total': agg.per_char_actions.get(name, 0),
                 'Emotions_Total': agg.per_char_emotions_total.get(name, 0),
                 'Goals_Total': agg.per_char_goals_total.get(name, 0),
@@ -1647,19 +1719,23 @@ def build_status_activity_rows(aggregates) -> List[Dict[str, Any]]:
                 'Emotion_Entropy': agg.per_char_emotion_entropy.get(name, 0.0),
                 'Goal_Entropy': agg.per_char_goal_entropy.get(name, 0.0),
                 'AI_State_Entropy': agg.per_char_ai_state_entropy.get(name, 0.0),
-            })
+            }
+            for v in status_vars:
+                var = v.replace('Mean_', '')
+                row[v] = agg.per_char_status.get(var, {}).get(name)
+            rows.append(row)
     return rows
 
 
-def compute_status_activity_correlations(rows: List[Dict[str, Any]]):
-    all_vars = STATUS_VARS + ACTIVITY_VARS
+def compute_status_activity_correlations(rows, status_vars):
+    all_vars = list(status_vars) + list(ACTIVITY_VARS)
     filtered = [r for r in rows if all(r.get(v) is not None for v in all_vars)]
     columns = {v: [float(r[v]) for r in filtered] for v in all_vars}
     return all_vars, columns, filtered
 
 
-def print_status_activity_correlations(rows: List[Dict[str, Any]]):
-    all_vars, columns, filtered = compute_status_activity_correlations(rows)
+def print_status_activity_correlations(rows, status_vars):
+    all_vars, columns, filtered = compute_status_activity_correlations(rows, status_vars)
     n = len(filtered)
     print("\n" + "=" * 100)
     print(f"STATUS x ACTIVITY CORRELATIONS (n = {n} character-world rows)")
@@ -1672,7 +1748,7 @@ def print_status_activity_correlations(rows: List[Dict[str, Any]]):
         print(f"{a[:14]:>16}", end="")
     print()
     print("-" * (18 + 16 * len(ACTIVITY_VARS)))
-    for s in STATUS_VARS:
+    for s in status_vars:
         print(f"{s:<18}", end="")
         for a in ACTIVITY_VARS:
             r_p = pearson_correlation(columns[s], columns[a])
@@ -1697,7 +1773,7 @@ def print_status_activity_correlations(rows: List[Dict[str, Any]]):
             for a in ACTIVITY_VARS:
                 print(f"{a[:14]:>16}", end="")
             print()
-            for s in STATUS_VARS:
+            for s in status_vars:
                 print(f"  {s:<18}", end="")
                 for a in ACTIVITY_VARS:
                     r_p = pearson_correlation(sub_cols[s], sub_cols[a])
@@ -1706,14 +1782,14 @@ def print_status_activity_correlations(rows: List[Dict[str, Any]]):
         print("=" * 100)
 
 
-def write_status_activity_correlations_csv(rows: List[Dict[str, Any]], out_path: str):
-    all_vars, columns, filtered = compute_status_activity_correlations(rows)
+def write_status_activity_correlations_csv(rows, status_vars, out_path: str):
+    all_vars, columns, filtered = compute_status_activity_correlations(rows, status_vars)
     n = len(filtered)
     with open(out_path, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow(['Status_Variable', 'Activity_Variable',
                          'Pearson_r', 'Spearman_r', 'N'])
-        for s in STATUS_VARS:
+        for s in status_vars:
             for a in ACTIVITY_VARS:
                 r_p = pearson_correlation(columns[s], columns[a])
                 r_s = spearman_correlation(columns[s], columns[a])
@@ -1731,7 +1807,7 @@ def write_status_activity_correlations_csv(rows: List[Dict[str, Any]], out_path:
             if len(sub) < 2:
                 continue
             sub_cols = {v: [float(r[v]) for r in sub] for v in all_vars}
-            for s in STATUS_VARS:
+            for s in status_vars:
                 for a in ACTIVITY_VARS:
                     r_p = pearson_correlation(sub_cols[s], sub_cols[a])
                     r_s = spearman_correlation(sub_cols[s], sub_cols[a])
@@ -1739,8 +1815,8 @@ def write_status_activity_correlations_csv(rows: List[Dict[str, Any]], out_path:
     print(f"[CSV]   {per_world_path}")
 
 
-def write_status_activity_correlations_latex(rows: List[Dict[str, Any]], out_path: str):
-    all_vars, columns, filtered = compute_status_activity_correlations(rows)
+def write_status_activity_correlations_latex(rows, status_vars, out_path: str):
+    all_vars, columns, filtered = compute_status_activity_correlations(rows, status_vars)
     n = len(filtered)
     lines = []
     lines.append("\\begin{table}[htbp]")
@@ -1754,7 +1830,7 @@ def write_status_activity_correlations_latex(rows: List[Dict[str, Any]], out_pat
     lines.append("\\textbf{Status} & " +
                  " & ".join(f"\\textbf{{{_latex_escape(a)}}}" for a in ACTIVITY_VARS) + " \\\\")
     lines.append("\\hline")
-    for s in STATUS_VARS:
+    for s in status_vars:
         row = [f"\\texttt{{{_latex_escape(s)}}}"]
         for a in ACTIVITY_VARS:
             r_p = pearson_correlation(columns[s], columns[a])
@@ -1860,11 +1936,6 @@ def write_per_world_matrices_csv(aggregates, attr_name, row_label, col_label, ou
 
 
 def run_occurrence_matrices(aggregates, out_dir, csv_only=False, no_charts=False):
-    """Generate aggregated + per-world occurrence matrices and heatmaps.
-
-    Plotting delegates to swm_plots.plot_aggregated_heatmap and
-    swm_plots.plot_per_world_heatmaps_grid (shared library).
-    """
     print("\n" + "=" * 70)
     print("OCCURRENCE / CO-OCCURRENCE MATRICES")
     print("=" * 70)
@@ -1917,8 +1988,8 @@ def run_occurrence_matrices(aggregates, out_dir, csv_only=False, no_charts=False
 # EFFECT SIZES (Cohen's d)
 # ============================================================
 
-def compute_effect_sizes(aggregates):
-    variables, per_world = _collect_world_variable_values(aggregates)
+def compute_effect_sizes(aggregates, extra_status_vars=None):
+    variables, per_world = _collect_world_variable_values(aggregates, extra_status_vars)
     world_means = {v: {} for v in variables}
     for v in variables:
         for world, d in per_world.items():
@@ -2091,6 +2162,17 @@ Examples:
             print("[ERROR] No worlds successfully loaded. Aborting.")
             sys.exit(1)
 
+        # ---- Discover all status variables ----
+        status_vars = _discover_status_vars(aggregates)
+        status_var_labels = [f'Mean_{v}' for v in status_vars]
+        print(f"\n[STATUS VARS] {status_var_labels}")
+
+        # Expose each per_char_status dict as an attribute so plot_boxplot_metric
+        # can look it up via getattr().
+        for agg in aggregates:
+            for var, d in agg.per_char_status.items():
+                setattr(agg, _safe_attr_name(var), d)
+
         # ============ CSVs (basic) ============
         write_comparative_counts_csv(aggregates, 'action_counts',
             os.path.join(args.out, 'comparative_actions.csv'))
@@ -2128,7 +2210,6 @@ Examples:
                 os.path.join(args.out, 'comparative_ai_states_bar.png'),
                 cmap_name='tab10', top_k=args.top_k)
 
-            # Raw total observations per tick (can be flat, kept for reference)
             plot_comparative_lineplot_over_time(aggregates, 'action_counts',
                 'Actions over Time - comparative (one line per world)',
                 os.path.join(args.out, 'comparative_actions_lineplot.png'))
@@ -2136,7 +2217,6 @@ Examples:
                 'Goals over Time - comparative (one line per world)',
                 os.path.join(args.out, 'comparative_goals_lineplot.png'))
 
-            # Entropy / dominant-share views (informative when totals are flat)
             plot_comparative_entropy_over_time(aggregates, 'emotion_counts',
                 'Emotion entropy over Time - comparative',
                 os.path.join(args.out, 'comparative_emotions_entropy.png'))
@@ -2157,7 +2237,6 @@ Examples:
                 'Dominant AI state share over Time - comparative',
                 os.path.join(args.out, 'comparative_ai_states_dominant_share.png'))
 
-            # Per-category line plots (top-K categories per subplot)
             plot_comparative_lineplot_stacked_categories(aggregates, 'action_counts',
                 'Actions per category',
                 os.path.join(args.out, 'comparative_actions_by_category_lineplot.png'),
@@ -2175,10 +2254,8 @@ Examples:
                 os.path.join(args.out, 'comparative_ai_states_by_category_lineplot.png'),
                 cmap_name='tab10', top_k=10)
 
+            # ---- Fixed per-character activity boxplots ----
             for dict_name, label, fname in [
-                ('per_char_health', 'Mean Health', 'boxplot_health_by_world.png'),
-                ('per_char_stamina', 'Mean Stamina', 'boxplot_stamina_by_world.png'),
-                ('per_char_morale', 'Mean Morale', 'boxplot_morale_by_world.png'),
                 ('per_char_actions', 'Total Actions', 'boxplot_actions_by_world.png'),
                 ('per_char_goals', 'Distinct Goals', 'boxplot_goals_by_world.png'),
                 ('per_char_emotions', 'Distinct Emotions', 'boxplot_emotions_by_world.png'),
@@ -2190,11 +2267,20 @@ Examples:
                     f'Per-character {label} across Worlds',
                     os.path.join(args.out, fname))
 
-            # Dynamics (status variables over time)
-            status_vars = detect_status_variables(aggregates)
-            if status_vars:
-                print(f"\n[DYNAMICS] Detected status variables: {status_vars}")
-                for var in status_vars:
+            # ---- Dynamic per-status boxplots ----
+            for var in status_vars:
+                attr_name = _safe_attr_name(var)
+                fname = f'boxplot_{var.lower()}_by_world.png'
+                plot_boxplot_metric(
+                    aggregates, attr_name, f'Mean {var}',
+                    f'Per-character Mean {var} across Worlds',
+                    os.path.join(args.out, fname))
+
+            # ---- Dynamics (status variables over time) ----
+            status_timeline_vars = detect_status_variables(aggregates)
+            if status_timeline_vars:
+                print(f"\n[DYNAMICS] Detected status variables in timeline: {status_timeline_vars}")
+                for var in status_timeline_vars:
                     plot_variable_over_time(aggregates, var,
                         os.path.join(args.out, f'dynamics_{var}_over_time.png'))
                     plot_boxplot_status_variable(aggregates, var,
@@ -2211,7 +2297,7 @@ Examples:
             print("\n[INFO] Occurrence matrices skipped (--skip-matrices)")
 
         # ============ Correlation (general per-character matrix) ============
-        variables, columns = build_per_character_matrix(aggregates)
+        variables, columns = build_per_character_matrix(aggregates, status_var_labels)
         if variables and all(len(columns[v]) >= 2 for v in variables):
             corr_matrix = compute_correlation_matrix(variables, columns)
             print_correlation_matrix(variables, corr_matrix)
@@ -2225,28 +2311,33 @@ Examples:
 
         # ============ Status x Activity correlations ============
         print("\n[STATUS x ACTIVITY] Computing correlations...")
-        sa_rows = build_status_activity_rows(aggregates)
-        if len(sa_rows) >= 3:
-            print_status_activity_correlations(sa_rows)
-            write_status_activity_correlations_csv(
-                sa_rows, os.path.join(args.out, 'correlation_status_activity.csv'))
-            if not args.csv_only and not args.no_latex:
-                write_status_activity_correlations_latex(
-                    sa_rows, os.path.join(args.out, 'correlation_status_activity.tex'))
-            if not args.csv_only and not args.no_charts:
-                scatter_dir = os.path.join(args.out, 'scatter_status_activity')
-                os.makedirs(scatter_dir, exist_ok=True)
-                for s in STATUS_VARS:
-                    for a in ACTIVITY_VARS:
-                        fname = f"scatter_{s}_vs_{a}.png"
-                        plot_status_vs_activity_scatter(
-                            sa_rows, s, a, os.path.join(scatter_dir, fname))
+        if not status_var_labels:
+            print("[WARN] No status variables found in statistics.csv; skipping.")
         else:
-            print(f"[WARN] Only {len(sa_rows)} status/activity rows; need >=3 for correlation.")
+            sa_rows = build_status_activity_rows(aggregates, status_var_labels)
+            if len(sa_rows) >= 3:
+                print_status_activity_correlations(sa_rows, status_var_labels)
+                write_status_activity_correlations_csv(
+                    sa_rows, status_var_labels,
+                    os.path.join(args.out, 'correlation_status_activity.csv'))
+                if not args.csv_only and not args.no_latex:
+                    write_status_activity_correlations_latex(
+                        sa_rows, status_var_labels,
+                        os.path.join(args.out, 'correlation_status_activity.tex'))
+                if not args.csv_only and not args.no_charts:
+                    scatter_dir = os.path.join(args.out, 'scatter_status_activity')
+                    os.makedirs(scatter_dir, exist_ok=True)
+                    for s in status_var_labels:
+                        for a in ACTIVITY_VARS:
+                            fname = f"scatter_{s}_vs_{a}.png"
+                            plot_status_vs_activity_scatter(
+                                sa_rows, s, a, os.path.join(scatter_dir, fname))
+            else:
+                print(f"[WARN] Only {len(sa_rows)} status/activity rows; need >=3 for correlation.")
 
         # ============ Effect sizes ============
         if len(aggregates) >= 2:
-            effect_data = compute_effect_sizes(aggregates)
+            effect_data = compute_effect_sizes(aggregates, extra_status_vars=status_var_labels)
             print_effect_sizes(effect_data)
             write_effect_sizes_csv(effect_data,
                 os.path.join(args.out, 'effect_sizes.csv'))
@@ -2260,7 +2351,8 @@ Examples:
         # ============ Statistical pipeline ============
         if len(aggregates) >= 2:
             print("\n[STATS] Running statistical pipeline...")
-            stat_results = run_statistical_pipeline(aggregates)
+            stat_results = run_statistical_pipeline(aggregates,
+                                                    extra_status_vars=status_var_labels)
             print_statistical_pipeline(stat_results)
             write_statistical_pipeline_csv(stat_results,
                 os.path.join(args.out, 'statistical_pipeline.csv'))

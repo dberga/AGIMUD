@@ -53,6 +53,14 @@ TIMELINE_MAP = {
 
 _TIMELINE_MAP = TIMELINE_MAP
 
+# Per-tick CSV filenames corresponding to each timeline field
+PER_TICK_FILES = {
+    'action_counts':   'actions_per_tick.csv',
+    'emotion_counts':  'emotions_per_tick.csv',
+    'goal_counts':     'goals_per_tick.csv',
+    'ai_state_counts': 'ai_states_per_tick.csv',
+}
+
 MATRIX_SPECS = [
     ('emotion_action_matrix',  'emotion',   'action',    'Emotion',   'Action',    'emotion_action'),
     ('action_emotion_matrix',  'action',    'emotion',   'Action',    'Emotion',   'action_emotion'),
@@ -112,7 +120,61 @@ def safe_set_style(plt_module=None):
 def _safe_set_style(plt_module=None):
     return safe_set_style(plt_module)
 
+# ============================================================
+# SMOOTHING / DOWNSAMPLING HELPERS
+# ============================================================
 
+DEFAULT_SMOOTH_WINDOW = 101
+
+def _rolling_mean(values, window):
+    """Centered rolling mean with edge handling (shrinking window at edges)."""
+    n = len(values)
+    if n == 0:
+        return []
+    if window <= 1:
+        return list(values)
+    half = window // 2
+    out = []
+    for i in range(n):
+        lo = max(0, i - half)
+        hi = min(n, i + half + 1)
+        chunk = values[lo:hi]
+        out.append(sum(chunk) / len(chunk))
+    return out
+
+
+def _rolling_std(values, window):
+    """Centered rolling std (population) matching _rolling_mean's windows."""
+    n = len(values)
+    if n == 0:
+        return []
+    if window <= 1:
+        return [0.0] * n
+    half = window // 2
+    out = []
+    for i in range(n):
+        lo = max(0, i - half)
+        hi = min(n, i + half + 1)
+        chunk = values[lo:hi]
+        if len(chunk) < 2:
+            out.append(0.0)
+            continue
+        m = sum(chunk) / len(chunk)
+        v = sum((x - m) ** 2 for x in chunk) / len(chunk)
+        out.append(math.sqrt(v))
+    return out
+
+
+def _downsample(ticks, *series, max_points=800):
+    """Stride-subsample all series to <= max_points so matplotlib stays fast."""
+    n = len(ticks)
+    if n <= max_points:
+        return (ticks, *series)
+    stride = max(1, n // max_points)
+    ticks_ds = ticks[::stride]
+    series_ds = tuple(s[::stride] for s in series)
+    return (ticks_ds, *series_ds)
+    
 # ============================================================
 # REUSABLE PLOT HELPERS (used by swm_analyze.py)
 # ============================================================
@@ -136,8 +198,8 @@ def plot_comparative_grouped_bars(aggregates, field, title, out_path,
 
     fig, ax = plt.subplots(figsize=(max(10, n_cats * 0.9), 6))
     x = np.arange(n_cats)
-    cmap = plt.cm.get_cmap(cmap_name, max(10, n_worlds))      
-    world_colors = {agg.world_name: cmap(i % 10) for i, agg in enumerate(aggregates)} 
+    cmap = plt.cm.get_cmap(cmap_name, max(10, n_worlds))
+    world_colors = {agg.world_name: cmap(i % 10) for i, agg in enumerate(aggregates)}
 
     for i, agg in enumerate(aggregates):
         counts = getattr(agg, field)
@@ -157,12 +219,13 @@ def plot_comparative_grouped_bars(aggregates, field, title, out_path,
 
 
 def plot_comparative_lineplot_over_time(aggregates, field, title, out_path,
-                                        cmap_name='tab20'):
-    """One line per world: total observations per tick for the given field.
+                                        cmap_name='tab20',
+                                        smooth_window=DEFAULT_SMOOTH_WINDOW,
+                                        aggregate_across_worlds=False):
+    """Comparative line plot over time (smoothed).
 
-    NOTE: for emotions / AI states, this is often constant (= number of active
-    characters). Prefer plot_comparative_entropy_over_time or
-    plot_comparative_dominant_share_over_time for more informative views.
+    aggregate_across_worlds=False -> one smoothed line per world.
+    aggregate_across_worlds=True  -> single grand-mean line + std band across worlds.
     """
     if not aggregates or plt is None or np is None:
         return
@@ -171,29 +234,49 @@ def plot_comparative_lineplot_over_time(aggregates, field, title, out_path,
         return
     timeline_attr, _key = TIMELINE_MAP[field]
 
-    fig, ax = plt.subplots(figsize=(14, 6))
-    cmap = plt.cm.get_cmap(cmap_name, max(20, len(aggregates)))
-    plotted = False
-    for i, agg in enumerate(aggregates):
+    world_data = {}
+    for agg in aggregates:
         if not getattr(agg, 'plotter', None):
             continue
-        timeline = getattr(agg.plotter, timeline_attr, []) or []
-        tick_totals = defaultdict(int)
-        for entry in timeline:
-            tick_totals[entry.get('tick', 0)] += 1
-        if not tick_totals:
-            continue
-        ticks = sorted(tick_totals.keys())
-        y = [tick_totals[t] for t in ticks]
-        ax.plot(ticks, y, marker='o', markersize=3, linewidth=1.8,
-                color=cmap(i % 20), label=agg.world_name, alpha=0.85)
-        plotted = True
-    if not plotted:
-        plt.close()
+        tick_totals = _get_tick_totals(agg, field, timeline_attr)
+        if tick_totals:
+            world_data[agg.world_name] = tick_totals
+    if not world_data:
         return
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    if aggregate_across_worlds:
+        all_ticks = sorted({t for d in world_data.values() for t in d.keys()})
+        matrix = np.full((len(world_data), len(all_ticks)), np.nan)
+        for i, d in enumerate(world_data.values()):
+            for j, t in enumerate(all_ticks):
+                if t in d:
+                    matrix[i, j] = d[t]
+        mean = np.nanmean(matrix, axis=0)
+        std = np.nanstd(matrix, axis=0)
+        mean_s = _rolling_mean(mean.tolist(), smooth_window)
+        std_s = _rolling_std(mean.tolist(), smooth_window)
+        ticks_ds, mean_ds, std_ds = _downsample(all_ticks, mean_s, std_s)
+        ax.plot(ticks_ds, mean_ds, linewidth=1.2, color='black',
+                label='Grand mean (all worlds)', alpha=0.9)
+        ax.fill_between(ticks_ds,
+                        [m - s for m, s in zip(mean_ds, std_ds)],
+                        [m + s for m, s in zip(mean_ds, std_ds)],
+                        alpha=0.20, color='gray', label='±1 SD across worlds')
+    else:
+        cmap = plt.cm.get_cmap(cmap_name, max(20, len(world_data)))
+        for i, (world_name, tick_totals) in enumerate(world_data.items()):
+            ticks = sorted(tick_totals.keys())
+            raw = [tick_totals[t] for t in ticks]
+            smoothed = _rolling_mean(raw, smooth_window)
+            ticks_ds, y_ds = _downsample(ticks, smoothed)
+            ax.plot(ticks_ds, y_ds, linewidth=1.0, color=cmap(i % 20),
+                    label=world_name, alpha=0.85)
+
     ax.set_xlabel('Tick')
-    ax.set_ylabel('Total observations')
-    ax.set_title(title)
+    ax.set_ylabel('Total observations (smoothed)')
+    ax.set_title(f"{title}  [rolling mean, window={smooth_window}]")
     ax.grid(True, alpha=0.3)
     ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=9)
     plt.tight_layout()
@@ -202,15 +285,36 @@ def plot_comparative_lineplot_over_time(aggregates, field, title, out_path,
     print(f"[CHART] {out_path}")
 
 
-def plot_comparative_entropy_over_time(aggregates, field, title, out_path,
-                                       cmap_name='tab10'):
-    """
-    Line plot per world: Shannon entropy (bits) of the category distribution
-    computed at each tick, across the given timeline.
+def _get_tick_categories(agg, field, timeline_attr):
+    """Return {tick: {category: count}} preferring per_tick CSVs."""
+    per_tick = getattr(agg, 'per_tick_counts', {}).get(field)
+    if per_tick:
+        return per_tick
+    timeline = getattr(agg.plotter, timeline_attr, []) or []
+    _, key = TIMELINE_MAP[field]
+    out = defaultdict(lambda: defaultdict(int))
+    for entry in timeline:
+        out[entry.get('tick', 0)][entry.get(key, 'Unknown')] += 1
+    return out
 
-    Low entropy  -> one category dominates
-    High entropy -> categories are spread out evenly
-    """
+
+def _get_tick_totals(agg, field, timeline_attr):
+    """Return {tick: total} preferring per_tick CSVs."""
+    per_tick = getattr(agg, 'per_tick_counts', {}).get(field)
+    if per_tick:
+        return {t: sum(d.values()) for t, d in per_tick.items()}
+    timeline = getattr(agg.plotter, timeline_attr, []) or []
+    out = defaultdict(int)
+    for entry in timeline:
+        out[entry.get('tick', 0)] += 1
+    return dict(out)
+
+
+def plot_comparative_entropy_over_time(aggregates, field, title, out_path,
+                                       cmap_name='tab10',
+                                       smooth_window=DEFAULT_SMOOTH_WINDOW,
+                                       aggregate_across_worlds=True):
+    """Entropy over time (smoothed). Defaults to grand-mean + std band."""
     if not aggregates or plt is None or np is None:
         return
     if field not in TIMELINE_MAP:
@@ -218,38 +322,60 @@ def plot_comparative_entropy_over_time(aggregates, field, title, out_path,
         return
     timeline_attr, key_field = TIMELINE_MAP[field]
 
-    fig, ax = plt.subplots(figsize=(14, 6))
-    cmap = plt.cm.get_cmap(cmap_name, max(10, len(aggregates)))
-    plotted = False
-    for i, agg in enumerate(aggregates):
+    world_entropy = {}
+    for agg in aggregates:
         if not getattr(agg, 'plotter', None):
             continue
-        timeline = getattr(agg.plotter, timeline_attr, []) or []
-        tick_cat = defaultdict(lambda: defaultdict(int))
-        for entry in timeline:
-            tick_cat[entry.get('tick', 0)][entry.get(key_field, 'Unknown')] += 1
+        tick_cat = _get_tick_categories(agg, field, timeline_attr)
         if not tick_cat:
             continue
         ticks = sorted(tick_cat.keys())
-        ys = []
+        ent = []
         for t in ticks:
             counts = list(tick_cat[t].values())
             total = sum(counts)
             if total == 0:
-                ys.append(0.0)
+                ent.append(0.0)
                 continue
             probs = [c / total for c in counts if c > 0]
-            H = -sum(p * math.log2(p) for p in probs)
-            ys.append(H)
-        ax.plot(ticks, ys, linewidth=1.8, color=cmap(i % 10),
-                label=agg.world_name, alpha=0.85)
-        plotted = True
-    if not plotted:
-        plt.close()
+            ent.append(-sum(p * math.log2(p) for p in probs))
+        world_entropy[agg.world_name] = dict(zip(ticks, ent))
+    if not world_entropy:
         return
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    if aggregate_across_worlds:
+        all_ticks = sorted({t for d in world_entropy.values() for t in d.keys()})
+        matrix = np.full((len(world_entropy), len(all_ticks)), np.nan)
+        for i, d in enumerate(world_entropy.values()):
+            for j, t in enumerate(all_ticks):
+                if t in d:
+                    matrix[i, j] = d[t]
+        mean = np.nanmean(matrix, axis=0)
+        std = np.nanstd(matrix, axis=0)
+        mean_s = _rolling_mean(mean.tolist(), smooth_window)
+        std_s = _rolling_std(mean.tolist(), smooth_window)
+        ticks_ds, mean_ds, std_ds = _downsample(all_ticks, mean_s, std_s)
+        ax.plot(ticks_ds, mean_ds, linewidth=1.2, color='black',
+                label='Grand mean (all worlds)', alpha=0.9)
+        ax.fill_between(ticks_ds,
+                        [m - s for m, s in zip(mean_ds, std_ds)],
+                        [m + s for m, s in zip(mean_ds, std_ds)],
+                        alpha=0.20, color='gray', label='±1 SD across worlds')
+    else:
+        cmap = plt.cm.get_cmap(cmap_name, max(10, len(world_entropy)))
+        for i, (world_name, d) in enumerate(world_entropy.items()):
+            ticks = sorted(d.keys())
+            raw = [d[t] for t in ticks]
+            smoothed = _rolling_mean(raw, smooth_window)
+            ticks_ds, y_ds = _downsample(ticks, smoothed)
+            ax.plot(ticks_ds, y_ds, linewidth=1.0, color=cmap(i % 10),
+                    label=world_name, alpha=0.85)
+
     ax.set_xlabel('Tick')
-    ax.set_ylabel('Shannon entropy (bits)')
-    ax.set_title(title)
+    ax.set_ylabel('Shannon entropy (bits, smoothed)')
+    ax.set_title(f"{title}  [rolling mean, window={smooth_window}]")
     ax.grid(True, alpha=0.3)
     ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=9)
     plt.tight_layout()
@@ -257,12 +383,11 @@ def plot_comparative_entropy_over_time(aggregates, field, title, out_path,
     plt.close()
     print(f"[CHART] {out_path}")
 
-
 def plot_comparative_dominant_share_over_time(aggregates, field, title, out_path,
-                                              cmap_name='tab10'):
-    """
-    Line plot per world: share (0..1) of the most frequent category at each tick.
-    """
+                                              cmap_name='tab10',
+                                              smooth_window=DEFAULT_SMOOTH_WINDOW,
+                                              aggregate_across_worlds=True):
+    """Dominant-category share over time (smoothed)."""
     if not aggregates or plt is None or np is None:
         return
     if field not in TIMELINE_MAP:
@@ -270,34 +395,58 @@ def plot_comparative_dominant_share_over_time(aggregates, field, title, out_path
         return
     timeline_attr, key_field = TIMELINE_MAP[field]
 
-    fig, ax = plt.subplots(figsize=(14, 6))
-    cmap = plt.cm.get_cmap(cmap_name, max(10, len(aggregates)))
-    plotted = False
-    for i, agg in enumerate(aggregates):
+    world_share = {}
+    for agg in aggregates:
         if not getattr(agg, 'plotter', None):
             continue
-        timeline = getattr(agg.plotter, timeline_attr, []) or []
-        tick_cat = defaultdict(lambda: defaultdict(int))
-        for entry in timeline:
-            tick_cat[entry.get('tick', 0)][entry.get(key_field, 'Unknown')] += 1
+        tick_cat = _get_tick_categories(agg, field, timeline_attr)
         if not tick_cat:
             continue
         ticks = sorted(tick_cat.keys())
-        ys = []
+        share = []
         for t in ticks:
             counts = list(tick_cat[t].values())
             total = sum(counts)
-            ys.append((max(counts) / total) if total > 0 else 0.0)
-        ax.plot(ticks, ys, linewidth=1.8, color=cmap(i % 10),
-                label=agg.world_name, alpha=0.85)
-        plotted = True
-    if not plotted:
-        plt.close()
+            share.append((max(counts) / total) if total > 0 else 0.0)
+        world_share[agg.world_name] = dict(zip(ticks, share))
+    if not world_share:
         return
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    if aggregate_across_worlds:
+        all_ticks = sorted({t for d in world_share.values() for t in d.keys()})
+        matrix = np.full((len(world_share), len(all_ticks)), np.nan)
+        for i, d in enumerate(world_share.values()):
+            for j, t in enumerate(all_ticks):
+                if t in d:
+                    matrix[i, j] = d[t]
+        mean = np.nanmean(matrix, axis=0)
+        std = np.nanstd(matrix, axis=0)
+        mean_s = _rolling_mean(mean.tolist(), smooth_window)
+        std_s = _rolling_std(mean.tolist(), smooth_window)
+        ticks_ds, mean_ds, std_ds = _downsample(all_ticks, mean_s, std_s)
+        ax.plot(ticks_ds, mean_ds, linewidth=1.2, color='black',
+                label='Grand mean (all worlds)', alpha=0.9)
+        ax.fill_between(ticks_ds,
+                        [m - s for m, s in zip(mean_ds, std_ds)],
+                        [m + s for m, s in zip(mean_ds, std_ds)],
+                        alpha=0.20, color='gray', label='±1 SD across worlds')
+        ax.set_ylim(0, 1.05)
+    else:
+        cmap = plt.cm.get_cmap(cmap_name, max(10, len(world_share)))
+        for i, (world_name, d) in enumerate(world_share.items()):
+            ticks = sorted(d.keys())
+            raw = [d[t] for t in ticks]
+            smoothed = _rolling_mean(raw, smooth_window)
+            ticks_ds, y_ds = _downsample(ticks, smoothed)
+            ax.plot(ticks_ds, y_ds, linewidth=1.0, color=cmap(i % 10),
+                    label=world_name, alpha=0.85)
+        ax.set_ylim(0, 1.05)
+
     ax.set_xlabel('Tick')
-    ax.set_ylabel('Dominant category share')
-    ax.set_ylim(0, 1.05)
-    ax.set_title(title)
+    ax.set_ylabel('Dominant category share (smoothed)')
+    ax.set_title(f"{title}  [rolling mean, window={smooth_window}]")
     ax.grid(True, alpha=0.3)
     ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=9)
     plt.tight_layout()
@@ -306,14 +455,35 @@ def plot_comparative_dominant_share_over_time(aggregates, field, title, out_path
     print(f"[CHART] {out_path}")
 
 
+
+
 def plot_comparative_lineplot_stacked_categories(aggregates, field, title, out_path,
-                                                 cmap_name='tab20', top_k=10):
-    """One subplot per world; top-K categories shown as separate lines."""
+                                                 cmap_name='tab20', top_k=10,
+                                                 smooth_window=DEFAULT_SMOOTH_WINDOW):
+    """One subplot per world; top-K categories shown as smoothed lines.
+
+    Colors come from a flat, fixed palette assigned by position in the
+    GLOBAL category ordering. Each category has exactly one color across
+    every subplot, with no tab20 shade-pairing and no per-world rebuilds.
+
+    Legend uses mpatches.Patch handles built directly from color_of, so
+    the swatch always matches the line. Only categories with real
+    non-zero data in that world appear in the plot AND in the legend.
+    """
     if not aggregates or plt is None or np is None:
         return
     if field not in TIMELINE_MAP:
         return
     timeline_attr, key_field = TIMELINE_MAP[field]
+
+    # Flat, non-paired palette. No tab20 shade-pairing.
+    palette = [
+        '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+        '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+        '#aec7e8', '#ffbb78', '#98df8a', '#ff9896', '#c5b0d5',
+        '#c49c94', '#f7b6d2', '#c7c7c7', '#dbdb8d', '#9edae5',
+        '#393b79', '#637939', '#8c6d31', '#843c39',
+    ]
 
     n_worlds = len(aggregates)
     fig, axes = plt.subplots(n_worlds, 1,
@@ -322,41 +492,89 @@ def plot_comparative_lineplot_stacked_categories(aggregates, field, title, out_p
     if n_worlds == 1:
         axes = [axes]
 
-    totals = defaultdict(int)
+    # ---- 1. Global category set + per-world tick maps ----
+    all_categories = set()
+    global_totals = defaultdict(int)
+    per_world_tick_cat = {}
+
     for agg in aggregates:
         for cat, cnt in getattr(agg, field).items():
-            totals[cat] += cnt
-    top_cats = [c for c, _ in sorted(totals.items(), key=lambda x: -x[1])[:top_k]]
-    cmap = plt.cm.get_cmap(cmap_name, max(20, len(top_cats)))
-    colors = {c: cmap(i % 20) for i, c in enumerate(top_cats)}
+            cat = str(cat).strip()
+            all_categories.add(cat)
+            global_totals[cat] += int(cnt)
 
-    for ax, agg in zip(axes, aggregates):
         if not getattr(agg, 'plotter', None):
-            ax.set_visible(False)
+            per_world_tick_cat[agg.world_name] = None
             continue
-        timeline = getattr(agg.plotter, timeline_attr, []) or []
-        tick_cat = defaultdict(lambda: defaultdict(int))
-        for entry in timeline:
-            tick_cat[entry.get('tick', 0)][entry.get(key_field, 'Unknown')] += 1
-        if not tick_cat:
+
+        tc = _get_tick_categories(agg, field, timeline_attr)
+        per_world_tick_cat[agg.world_name] = tc
+        if tc:
+            for d in tc.values():
+                for cat in d.keys():
+                    all_categories.add(str(cat).strip())
+
+    if not all_categories:
+        plt.close()
+        return
+
+    # ---- 2. Deterministic global ordering ----
+    ordered_all = sorted(all_categories,
+                         key=lambda c: (-global_totals.get(c, 0), c))
+
+    # ---- 3. Flat color map built ONCE, over ALL categories ----
+    color_of = {
+        cat: palette[i % len(palette)]
+        for i, cat in enumerate(ordered_all)
+    }
+
+    top_set = set(ordered_all[:top_k])
+
+    # ---- 4. Draw each world ----
+    for ax, agg in zip(axes, aggregates):
+        tc = per_world_tick_cat.get(agg.world_name)
+        if not tc:
             ax.set_title(f"{agg.world_name} (no data)")
             continue
-        ticks = sorted(tick_cat.keys())
-        for c in top_cats:
-            y = [tick_cat[t].get(c, 0) for t in ticks]
-            if any(y):
-                ax.plot(ticks, y, linewidth=1.6, color=colors[c], label=c, alpha=0.85)
-        ax.set_title(f"{agg.world_name} - {title}")
-        ax.set_ylabel('Per tick')
+
+        ticks = sorted(tc.keys())
+
+        # Only draw categories that actually have non-zero data in this world
+        to_draw = []   # list of (category, ticks_ds, y_ds)
+        for c in ordered_all:
+            if c not in top_set:
+                continue
+            raw = [tc[t].get(c, 0) for t in ticks]
+            if sum(raw) == 0:
+                continue
+            smoothed = _rolling_mean(raw, smooth_window)
+            ticks_ds, y_ds = _downsample(ticks, smoothed)
+            to_draw.append((c, ticks_ds, y_ds))
+
+        for c, ticks_ds, y_ds in to_draw:
+            ax.plot(ticks_ds, y_ds, linewidth=1.0,
+                    color=color_of[c], alpha=0.9)
+
+        ax.set_title(f"{agg.world_name} - {title}  [window={smooth_window}]")
+        ax.set_ylabel('Per tick (smoothed)')
         ax.grid(True, alpha=0.3)
-        ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=7, ncol=1)
+
+        # ---- 5. Legend: one Patch per drawn category, color from color_of ----
+        if to_draw:
+            handles = [
+                mpatches.Patch(facecolor=color_of[c],
+                               edgecolor=color_of[c],
+                               label=c)
+                for c, _, _ in to_draw
+            ]
+            ax.legend(handles=handles, loc='center left',
+                      bbox_to_anchor=(1, 0.5), fontsize=7, ncol=1)
 
     axes[-1].set_xlabel('Tick')
     plt.tight_layout()
     plt.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"[CHART] {out_path}")
-
 
 def plot_boxplot_metric(aggregates, per_char_dict_name, ylabel, title, out_path):
     """Boxplot of a per-character dict across worlds."""
@@ -386,40 +604,84 @@ def plot_boxplot_metric(aggregates, per_char_dict_name, ylabel, title, out_path)
     print(f"[CHART] {out_path}")
 
 
-def plot_variable_over_time(aggregates, variable, out_path, agg_mode='mean'):
-    """Line plot per world of a status variable over ticks."""
+def plot_variable_over_time(aggregates, variable, out_path, agg_mode='mean',
+                            smooth_window=DEFAULT_SMOOTH_WINDOW,
+                            aggregate_across_worlds=False):
+    """Status variable over time (smoothed mean line + std band)."""
     if not aggregates or plt is None or np is None:
         return
+
     fig, ax = plt.subplots(figsize=(14, 6))
-    cmap = plt.cm.get_cmap('tab10', max(10, len(aggregates)))
-    plotted = False
     ylabel = f"{variable}"
-    for i, agg in enumerate(aggregates):
-        if not agg.status_timeline:
-            continue
-        tick_values = defaultdict(list)
-        for entry in agg.status_timeline:
-            v = entry.get(variable)
-            if isinstance(v, (int, float)) and not isinstance(v, bool):
-                tick_values[entry.get('tick', 0)].append(v)
-        if not tick_values:
-            continue
-        ticks = sorted(tick_values.keys())
-        if agg_mode == 'mean':
-            y = [sum(tick_values[t]) / len(tick_values[t]) for t in ticks]
-            ylabel = f"Mean {variable} (across characters)"
-        else:
-            y = [sum(tick_values[t]) for t in ticks]
-            ylabel = f"Sum {variable}"
-        ax.plot(ticks, y, linewidth=1.8, color=cmap(i % 10),
-                label=agg.world_name, alpha=0.85)
-        plotted = True
-    if not plotted:
+
+    mean_key = f'Mean_{variable}'
+    std_key = f'Std_{variable}'
+    sum_key = f'Sum_{variable}'
+
+    world_series = {}
+    for agg in aggregates:
+        per_tick = getattr(agg, 'status_per_tick', {}) or {}
+        series = {}
+        if per_tick and (mean_key in per_tick or sum_key in per_tick):
+            for t, row in per_tick.items():
+                if agg_mode == 'mean' and mean_key in row and row[mean_key] is not None:
+                    series[t] = float(row[mean_key])
+                elif sum_key in row and row[sum_key] is not None:
+                    series[t] = float(row[sum_key])
+        elif agg.status_timeline:
+            tick_vals = defaultdict(list)
+            for e in agg.status_timeline:
+                v = e.get(variable)
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    tick_vals[e.get('tick', 0)].append(v)
+            for t, vals in tick_vals.items():
+                series[t] = sum(vals) / len(vals)
+        if series:
+            world_series[agg.world_name] = series
+
+    if not world_series:
         plt.close()
         return
+
+    if aggregate_across_worlds:
+        all_ticks = sorted({t for d in world_series.values() for t in d.keys()})
+        matrix = np.full((len(world_series), len(all_ticks)), np.nan)
+        for i, d in enumerate(world_series.values()):
+            for j, t in enumerate(all_ticks):
+                if t in d:
+                    matrix[i, j] = d[t]
+        mean = np.nanmean(matrix, axis=0)
+        std = np.nanstd(matrix, axis=0)
+        mean_s = _rolling_mean(mean.tolist(), smooth_window)
+        std_s = _rolling_std(mean.tolist(), smooth_window)
+        ticks_ds, mean_ds, std_ds = _downsample(all_ticks, mean_s, std_s)
+        ax.plot(ticks_ds, mean_ds, linewidth=1.2, color='black',
+                label='Grand mean (all worlds)', alpha=0.9)
+        ax.fill_between(ticks_ds,
+                        [m - s for m, s in zip(mean_ds, std_ds)],
+                        [m + s for m, s in zip(mean_ds, std_ds)],
+                        alpha=0.20, color='gray', label='±1 SD across worlds')
+        ylabel = f"Mean {variable} (smoothed)"
+    else:
+        cmap = plt.cm.get_cmap('tab10', max(10, len(world_series)))
+        for i, (world_name, d) in enumerate(world_series.items()):
+            ticks = sorted(d.keys())
+            raw = [d[t] for t in ticks]
+            mean_s = _rolling_mean(raw, smooth_window)
+            std_s = _rolling_std(raw, smooth_window)
+            ticks_ds, mean_ds, std_ds = _downsample(ticks, mean_s, std_s)
+            color = cmap(i % 10)
+            ax.plot(ticks_ds, mean_ds, linewidth=1.0, color=color,
+                    label=world_name, alpha=0.9)
+            ax.fill_between(ticks_ds,
+                            [m - s for m, s in zip(mean_ds, std_ds)],
+                            [m + s for m, s in zip(mean_ds, std_ds)],
+                            alpha=0.10, color=color)
+        ylabel = f"Mean {variable} (across characters, smoothed)"
+
     ax.set_xlabel('Tick')
     ax.set_ylabel(ylabel)
-    ax.set_title(f'{variable.capitalize()} over Time (per world)')
+    ax.set_title(f"{variable.capitalize()} over Time  [rolling mean, window={smooth_window}]")
     ax.grid(True, alpha=0.3)
     ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=9)
     plt.tight_layout()
@@ -438,6 +700,13 @@ def plot_boxplot_status_variable(aggregates, variable, out_path):
         vals = [e.get(variable) for e in agg.status_timeline
                 if isinstance(e.get(variable), (int, float))
                 and not isinstance(e.get(variable), bool)]
+        if not vals:
+            # try status_per_tick
+            per_tick = getattr(agg, 'status_per_tick', {}) or {}
+            mean_key = f'Mean_{variable}'
+            if per_tick and mean_key in next(iter(per_tick.values()), {}):
+                vals = [d.get(mean_key) for d in per_tick.values()
+                        if d.get(mean_key) is not None]
         if vals:
             data.append(vals)
             labels.append(agg.world_name)
@@ -824,10 +1093,6 @@ class TimelinePlotter:
     def add_status_entry(self, tick: int, character: str,
                          status_vars: Dict[str, Any],
                          ai_state: str = None, emotion: str = None):
-        """Record a status snapshot for a character at a given tick.
-
-        Only numeric status variables are kept. Non-numeric fields are ignored.
-        """
         entry = {
             'tick': tick,
             'character': character,
@@ -1177,7 +1442,6 @@ class TimelinePlotter:
         try:
             if not self.status_timeline:
                 return
-            # Column order: tick, character, ai_state, emotion, then the rest
             fixed = ['tick', 'character', 'ai_state', 'emotion']
             extra, seen = [], set(fixed)
             for e in self.status_timeline:
@@ -1276,12 +1540,11 @@ class TimelinePlotter:
         self._export_per_tick_csv(self.goal_timeline, 'goal', 'goals_per_tick.csv', 'Goal')
 
     def _export_status_per_tick_csv(self):
-        """Per-tick aggregated status: mean of every numeric status field."""
+        """Per-tick aggregated status: mean + std of every numeric status field."""
         filepath = os.path.join(self.world_folder, "status_per_tick.csv")
         try:
             if not self.status_timeline:
                 return
-            # Collect numeric fields (exclude tick/character/ai_state/emotion)
             fixed = {'tick', 'character', 'ai_state', 'emotion'}
             numeric_fields = set()
             for e in self.status_timeline:
@@ -1366,7 +1629,7 @@ class TimelinePlotter:
 
     def _safe_set_style(self, plt_module):
         return safe_set_style(plt_module)
-    
+
     def _get_categories_from_counts(self, counts_dict: Dict[str, Dict[str, int]]) -> List[str]:
         totals = defaultdict(int)
         for inner in counts_dict.values():
@@ -1406,7 +1669,8 @@ class TimelinePlotter:
         plt.close()
         print(f"[CHART] {filepath}")
 
-    def _stacked_over_time(self, timeline, key_field, palette, title, filepath, cmap_name='tab20'):
+    def _stacked_over_time(self, timeline, key_field, palette, title, filepath,
+                           cmap_name='tab20', smooth_window=DEFAULT_SMOOTH_WINDOW):
         if not timeline:
             return
         tick_counts = defaultdict(lambda: defaultdict(int))
@@ -1417,40 +1681,44 @@ class TimelinePlotter:
         safe_set_style(plt)
         ticks = sorted(tick_counts.keys())
 
-        all_keys = set()                              # <-- must exist
+        all_keys = set()
         for c in tick_counts.values():
             all_keys.update(c.keys())
-        all_keys = sorted(all_keys)                   # <-- must be assigned
+        all_keys = sorted(all_keys)
         if not all_keys:
-            return                                    # <-- early return if empty
+            return
 
+        # ---- stable name -> color mapping (built ONCE) ----
         if cmap_name == 'custom' and palette:
-            colors = {k: palette[i % len(palette)] for i, k in enumerate(all_keys)}
+            color_of = {k: palette[i % len(palette)] for i, k in enumerate(all_keys)}
         else:
             natural = 20 if cmap_name == 'tab20' else 10
             cmap = plt.cm.get_cmap(cmap_name, max(natural, len(all_keys)))
-            colors = {k: cmap(i % natural) for i, k in enumerate(all_keys)}
+            color_of = {k: cmap(i % natural) for i, k in enumerate(all_keys)}
+
+        # Build smoothed matrix in the SAME order as all_keys
+        matrix = []
+        for k in all_keys:
+            raw = [tick_counts[t].get(k, 0) for t in ticks]
+            matrix.append(_rolling_mean(raw, smooth_window))
+
+        ticks_ds, *matrix_ds = _downsample(ticks, *matrix)
+        colors = [color_of[k] for k in all_keys]
 
         fig, ax = plt.subplots(figsize=(14, 6))
-        bottoms = np.zeros(len(ticks))
-        for k in all_keys:
-            values = np.array([tick_counts[t].get(k, 0) for t in ticks])
-            if values.sum() > 0:
-                ax.bar(ticks, values, bottom=bottoms, width=1.0, color=colors[k])
-                bottoms += values
+        ax.stackplot(ticks_ds, *matrix_ds, colors=colors,
+                     labels=all_keys, alpha=0.85)
         ax.set_xlabel('Tick')
-        ax.set_ylabel('Observations')
-        ax.set_title(title)
-        legend_handles = [mpatches.Patch(color=colors[k], label=k) for k in all_keys]
-        ax.legend(handles=legend_handles, labels=all_keys,
-                  loc='center left', bbox_to_anchor=(1, 0.5), fontsize=8)
+        ax.set_ylabel('Observations (smoothed)')
+        ax.set_title(f"{title}  [rolling mean, window={smooth_window}]")
+        ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=8)
         plt.tight_layout()
         plt.savefig(filepath, dpi=150, bbox_inches='tight')
         plt.close()
         print(f"[CHART] {filepath}")
 
-    def _lineplot_over_time(self, timeline, key_field, palette, title, filepath, cmap_name='tab20'):
-        
+    def _lineplot_over_time(self, timeline, key_field, palette, title, filepath,
+                        cmap_name='tab20', smooth_window=DEFAULT_SMOOTH_WINDOW):
         if not timeline:
             return
         tick_counts = defaultdict(lambda: defaultdict(int))
@@ -1470,24 +1738,34 @@ class TimelinePlotter:
         if cmap_name == 'custom' and palette:
             colors = {k: palette[i % len(palette)] for i, k in enumerate(all_keys)}
         else:
-            cmap = plt.cm.get_cmap(cmap_name, max(10, len(all_keys)))  
-            colors = {k: cmap(i % 10) for i, k in enumerate(all_keys)} 
+            cmap = plt.cm.get_cmap(cmap_name, max(10, len(all_keys)))
+            colors = {k: cmap(i % 10) for i, k in enumerate(all_keys)}
 
         fig, ax = plt.subplots(figsize=(14, 6))
         for k in all_keys:
-            y = [tick_counts[t].get(k, 0) for t in ticks]
-            ax.plot(ticks, y, marker='o', markersize=3, linewidth=1.8,
-                    color=colors[k], label=k, alpha=0.85)
-        total = [sum(tick_counts[t].values()) for t in ticks]
-        ax.plot(ticks, total, linestyle='--', linewidth=1.2,
-                color='black', alpha=0.5, label='TOTAL')
+            raw = [tick_counts[t].get(k, 0) for t in ticks]
+            if not any(raw):
+                continue
+            smoothed = _rolling_mean(raw, smooth_window)
+            ticks_ds, y_ds = _downsample(ticks, smoothed)
+            ax.plot(ticks_ds, y_ds, linewidth=1.0, color=colors[k],
+                    label=k, alpha=0.85)
+
+        # TOTAL (smoothed as well)
+        raw_total = [sum(tick_counts[t].values()) for t in ticks]
+        total_s = _rolling_mean(raw_total, smooth_window)
+        ticks_ds, total_ds = _downsample(ticks, total_s)
+        ax.plot(ticks_ds, total_ds, linestyle='--', linewidth=1.2,
+                color='black', alpha=0.6, label='TOTAL')
+
         ax.set_xlabel('Tick')
-        ax.set_ylabel('Frequency (all characters)')
-        ax.set_title(title)
+        ax.set_ylabel('Frequency (all characters, smoothed)')
+        ax.set_title(f"{title}  [rolling mean, window={smooth_window}]")
         ax.grid(True, alpha=0.3)
         handles, labels = ax.get_legend_handles_labels()
         if handles:
-            ax.legend(handles, labels, loc='center left', bbox_to_anchor=(1, 0.5), fontsize=9)
+            ax.legend(handles, labels, loc='center left',
+                      bbox_to_anchor=(1, 0.5), fontsize=9)
         plt.tight_layout()
         plt.savefig(filepath, dpi=150, bbox_inches='tight')
         plt.close()
