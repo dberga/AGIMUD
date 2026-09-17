@@ -39,6 +39,7 @@ import json
 import os
 import csv
 import sys
+import glob
 import atexit
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
@@ -59,10 +60,25 @@ except ImportError:
     mpatches = None
 
 
+OUTPUT_PNGS = [
+    "actions_by_character.png",
+    "aistates_by_character.png",
+    "emotions_by_character.png",
+    "goals_by_character.png",
+    "actions_over_time.png",
+    "emotions_over_time.png",
+    "goals_over_time.png",
+    "actions_lineplot.png",
+    "emotions_lineplot.png",
+    "goals_lineplot.png",
+    "emotion_action_heatmap.png",
+    "emotion_aistate_heatmap.png",
+]
+
+
 class TimelinePlotter:
     """Generates CSV files and charts for action/emotion/goal timelines"""
 
-    # AI states that are NOT actions from the catalog (used to filter)
     KNOWN_AI_STATES = {
         'IDLE', 'GUARDING', 'FLEEING', 'SHARE', 'EXPLORE', 'COMBAT',
         'PATROL', 'ATTACK', 'RETREAT', 'DEFEND', 'GATHER', 'TRADE',
@@ -71,16 +87,15 @@ class TimelinePlotter:
 
     def __init__(self, world_folder: str, max_timeline_entries: Optional[int] = None):
         self.world_folder = world_folder
-        self.max_timeline_entries = max_timeline_entries  # None = unlimited
+        self.max_timeline_entries = max_timeline_entries
         self._csv_dirty = True
+        self.verbose = False
 
-        # Timeline data (populated by WorldRunner)
         self.action_timeline: List[Dict] = []
         self.emotion_timeline: List[Dict] = []
         self.ai_state_timeline: List[Dict] = []
         self.goal_timeline: List[Dict] = []
 
-        # Co-occurrence matrices
         self.emotion_action_matrix: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
         self.action_emotion_matrix: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
         self.emotion_aistate_matrix: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
@@ -89,7 +104,6 @@ class TimelinePlotter:
         self.character_aistate_counts: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
         self.character_goal_counts: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
-        # Color palettes
         self.emotion_color_palette = [
             '#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6',
             '#1abc9c', '#e67e22', '#34495e', '#95a5a6', '#d35400',
@@ -101,13 +115,11 @@ class TimelinePlotter:
             '#3498db', '#9b59b6',
         ]
 
-        # Register atexit handler to ensure CSVs are saved even on crash
         atexit.register(self._safe_export)
 
     # ==================== SAFETY ====================
 
     def _safe_export(self):
-        """Called on interpreter exit - ensure CSVs are written"""
         try:
             if self._csv_dirty and (self.action_timeline or self.emotion_timeline
                                     or self.ai_state_timeline or self.goal_timeline):
@@ -116,22 +128,37 @@ class TimelinePlotter:
             pass
 
     def _append_limited(self, timeline: List[Dict], entry: Dict):
-        """Append an entry, honouring the optional max_timeline_entries."""
         timeline.append(entry)
         if self.max_timeline_entries is not None and len(timeline) > self.max_timeline_entries:
             del timeline[:len(timeline) - self.max_timeline_entries]
+
+    def _log(self, msg: str):
+        if self.verbose:
+            print(msg)
+
+    def _diagnose(self, label: str):
+        """Print a summary of what's currently loaded (for debugging)."""
+        print(f"[DIAGNOSE] {label}:")
+        print(f"  action_timeline: {len(self.action_timeline)} entries, "
+              f"{len(self.character_action_counts)} characters, "
+              f"{len(self._get_categories_from_counts(self.character_action_counts))} action categories")
+        print(f"  emotion_timeline: {len(self.emotion_timeline)} entries, "
+              f"{len(self.character_emotion_counts)} characters, "
+              f"{len(self._get_categories_from_counts(self.character_emotion_counts))} emotion categories")
+        print(f"  ai_state_timeline: {len(self.ai_state_timeline)} entries, "
+              f"{len(self.character_aistate_counts)} characters, "
+              f"{len(self._get_categories_from_counts(self.character_aistate_counts))} AI state categories")
+        print(f"  goal_timeline: {len(self.goal_timeline)} entries, "
+              f"{len(self.character_goal_counts)} characters, "
+              f"{len(self._get_categories_from_counts(self.character_goal_counts))} goal categories")
 
     # ==================== DATA MANAGEMENT ====================
 
     def add_action_entry(self, tick: int, character: str, action: str,
                          emotion: str, ai_state: str = None):
-        """Record a single action event (action from catalog, not ai_state)"""
         entry = {
-            'tick': tick,
-            'character': character,
-            'action': action,
-            'emotion': emotion,
-            'ai_state': ai_state or ''
+            'tick': tick, 'character': character, 'action': action,
+            'emotion': emotion, 'ai_state': ai_state or ''
         }
         self._append_limited(self.action_timeline, entry)
         self.action_emotion_matrix[action][emotion] += 1
@@ -140,14 +167,9 @@ class TimelinePlotter:
 
     def add_emotion_entry(self, tick: int, character: str, emotion: str,
                           action: str = None, ai_state: str = None, goal: str = None):
-        """Record a single emotion observation"""
         entry = {
-            'tick': tick,
-            'character': character,
-            'emotion': emotion,
-            'action': action or '',
-            'ai_state': ai_state or '',
-            'goal': goal or ''
+            'tick': tick, 'character': character, 'emotion': emotion,
+            'action': action or '', 'ai_state': ai_state or '', 'goal': goal or ''
         }
         self._append_limited(self.emotion_timeline, entry)
         if action:
@@ -159,11 +181,8 @@ class TimelinePlotter:
 
     def add_ai_state_entry(self, tick: int, character: str, ai_state: str,
                            emotion: str = None):
-        """Record a single AI state observation"""
         entry = {
-            'tick': tick,
-            'character': character,
-            'ai_state': ai_state,
+            'tick': tick, 'character': character, 'ai_state': ai_state,
             'emotion': emotion or 'neutral'
         }
         self._append_limited(self.ai_state_timeline, entry)
@@ -174,20 +193,15 @@ class TimelinePlotter:
 
     def add_goal_entry(self, tick: int, character: str, goal: str,
                        emotion: str = None, ai_state: str = None):
-        """Record a single goal observation"""
         entry = {
-            'tick': tick,
-            'character': character,
-            'goal': goal,
-            'emotion': emotion or 'neutral',
-            'ai_state': ai_state or ''
+            'tick': tick, 'character': character, 'goal': goal,
+            'emotion': emotion or 'neutral', 'ai_state': ai_state or ''
         }
         self._append_limited(self.goal_timeline, entry)
         self.character_goal_counts[character][goal] += 1
         self._csv_dirty = True
 
     def _rebuild_matrices_from_timelines(self):
-        """Rebuild all co-occurrence matrices from the current timelines."""
         self.emotion_action_matrix = defaultdict(lambda: defaultdict(int))
         self.action_emotion_matrix = defaultdict(lambda: defaultdict(int))
         self.emotion_aistate_matrix = defaultdict(lambda: defaultdict(int))
@@ -230,10 +244,7 @@ class TimelinePlotter:
     def load_from_runtime(self, runtime_data: Dict[str, Any]):
         """
         Load timeline data from a runtime state dict.
-
-        IMPORTANT: this does NOT overwrite timelines already in memory if the
-        incoming data is shorter (the runtime JSON is windowed/truncated).
-        Only replaces when the incoming list is strictly larger.
+        Does NOT overwrite timelines already in memory if incoming data is shorter.
         """
         rt_actions = runtime_data.get('action_timeline', [])
         rt_emotions = runtime_data.get('emotion_timeline', [])
@@ -250,9 +261,9 @@ class TimelinePlotter:
             self.goal_timeline = list(rt_goals)
 
         self._rebuild_matrices_from_timelines()
+        self._diagnose("After load_from_runtime")
 
     def save_timelines_snapshot(self) -> bool:
-        """Save full (untruncated) timelines to a dedicated JSON snapshot."""
         filepath = os.path.join(self.world_folder, "timelines_snapshot.json")
         try:
             snapshot = {
@@ -270,7 +281,6 @@ class TimelinePlotter:
             return False
 
     def load_timelines_snapshot(self) -> bool:
-        """Load full timelines from the dedicated JSON snapshot, if present."""
         filepath = os.path.join(self.world_folder, "timelines_snapshot.json")
         if not os.path.exists(filepath):
             return False
@@ -287,6 +297,7 @@ class TimelinePlotter:
                   f"{len(self.emotion_timeline)} emotions, "
                   f"{len(self.ai_state_timeline)} AI states, "
                   f"{len(self.goal_timeline)} goals")
+            self._diagnose("After load_timelines_snapshot")
             return True
         except Exception as e:
             print(f"[ERROR] Failed to load timelines snapshot: {e}")
@@ -299,6 +310,8 @@ class TimelinePlotter:
         aistate_csv = os.path.join(self.world_folder, "ai_states_timeline.csv")
         goals_csv = os.path.join(self.world_folder, "goals_timeline.csv")
 
+        loaded_any = False
+
         if os.path.exists(actions_csv):
             try:
                 with open(actions_csv, 'r', encoding='utf-8') as f:
@@ -309,15 +322,15 @@ class TimelinePlotter:
                             tick = int(row.get('Tick', 0))
                         except (ValueError, TypeError):
                             tick = 0
-                        entry = {
+                        self.action_timeline.append({
                             'tick': tick,
                             'character': row.get('Character', 'Unknown'),
                             'action': row.get('Action', 'Unknown'),
                             'emotion': row.get('Emotion_At_Time', 'neutral'),
                             'ai_state': row.get('AI_State', '')
-                        }
-                        self.action_timeline.append(entry)
+                        })
                 print(f"[OK] Loaded {len(self.action_timeline)} action entries from CSV")
+                loaded_any = True
             except Exception as e:
                 print(f"[ERROR] Failed to load actions CSV: {e}")
 
@@ -331,16 +344,16 @@ class TimelinePlotter:
                             tick = int(row.get('Tick', 0))
                         except (ValueError, TypeError):
                             tick = 0
-                        entry = {
+                        self.emotion_timeline.append({
                             'tick': tick,
                             'character': row.get('Character', 'Unknown'),
                             'emotion': row.get('Emotion', 'neutral'),
                             'action': row.get('Action_At_Time', ''),
                             'ai_state': row.get('AI_State_At_Time', ''),
                             'goal': row.get('Goal_At_Time', '')
-                        }
-                        self.emotion_timeline.append(entry)
+                        })
                 print(f"[OK] Loaded {len(self.emotion_timeline)} emotion entries from CSV")
+                loaded_any = True
             except Exception as e:
                 print(f"[ERROR] Failed to load emotions CSV: {e}")
 
@@ -354,14 +367,14 @@ class TimelinePlotter:
                             tick = int(row.get('Tick', 0))
                         except (ValueError, TypeError):
                             tick = 0
-                        entry = {
+                        self.ai_state_timeline.append({
                             'tick': tick,
                             'character': row.get('Character', 'Unknown'),
                             'ai_state': row.get('AI_State', 'Unknown'),
                             'emotion': row.get('Emotion_At_Time', 'neutral')
-                        }
-                        self.ai_state_timeline.append(entry)
+                        })
                 print(f"[OK] Loaded {len(self.ai_state_timeline)} AI state entries from CSV")
+                loaded_any = True
             except Exception as e:
                 print(f"[ERROR] Failed to load AI states CSV: {e}")
 
@@ -375,24 +388,25 @@ class TimelinePlotter:
                             tick = int(row.get('Tick', 0))
                         except (ValueError, TypeError):
                             tick = 0
-                        entry = {
+                        self.goal_timeline.append({
                             'tick': tick,
                             'character': row.get('Character', 'Unknown'),
                             'goal': row.get('Goal', 'Unknown'),
                             'emotion': row.get('Emotion_At_Time', 'neutral'),
                             'ai_state': row.get('AI_State_At_Time', '')
-                        }
-                        self.goal_timeline.append(entry)
+                        })
                 print(f"[OK] Loaded {len(self.goal_timeline)} goal entries from CSV")
+                loaded_any = True
             except Exception as e:
                 print(f"[ERROR] Failed to load goals CSV: {e}")
 
-        self._rebuild_matrices_from_timelines()
+        if loaded_any:
+            self._rebuild_matrices_from_timelines()
+            self._diagnose("After load_from_csv")
 
     # ==================== CSV EXPORTS ====================
 
     def export_all_csv(self, verbose: bool = True):
-        """Export all timeline data as CSV files"""
         self._export_actions_timeline_csv()
         self._export_emotions_timeline_csv()
         self._export_ai_states_timeline_csv()
@@ -415,10 +429,8 @@ class TimelinePlotter:
                 writer.writerow(['Tick', 'Character', 'Action', 'Emotion_At_Time', 'AI_State'])
                 for entry in self.action_timeline:
                     writer.writerow([
-                        entry.get('tick', ''),
-                        entry.get('character', ''),
-                        entry.get('action', ''),
-                        entry.get('emotion', ''),
+                        entry.get('tick', ''), entry.get('character', ''),
+                        entry.get('action', ''), entry.get('emotion', ''),
                         entry.get('ai_state', '')
                     ])
         except Exception as e:
@@ -433,12 +445,9 @@ class TimelinePlotter:
                                  'AI_State_At_Time', 'Goal_At_Time'])
                 for entry in self.emotion_timeline:
                     writer.writerow([
-                        entry.get('tick', ''),
-                        entry.get('character', ''),
-                        entry.get('emotion', ''),
-                        entry.get('action', ''),
-                        entry.get('ai_state', ''),
-                        entry.get('goal', '')
+                        entry.get('tick', ''), entry.get('character', ''),
+                        entry.get('emotion', ''), entry.get('action', ''),
+                        entry.get('ai_state', ''), entry.get('goal', '')
                     ])
         except Exception as e:
             print(f"[ERROR] Failed to export emotions timeline CSV: {e}")
@@ -451,10 +460,8 @@ class TimelinePlotter:
                 writer.writerow(['Tick', 'Character', 'AI_State', 'Emotion_At_Time'])
                 for entry in self.ai_state_timeline:
                     writer.writerow([
-                        entry.get('tick', ''),
-                        entry.get('character', ''),
-                        entry.get('ai_state', ''),
-                        entry.get('emotion', '')
+                        entry.get('tick', ''), entry.get('character', ''),
+                        entry.get('ai_state', ''), entry.get('emotion', '')
                     ])
         except Exception as e:
             print(f"[ERROR] Failed to export AI states timeline CSV: {e}")
@@ -467,10 +474,8 @@ class TimelinePlotter:
                 writer.writerow(['Tick', 'Character', 'Goal', 'Emotion_At_Time', 'AI_State_At_Time'])
                 for entry in self.goal_timeline:
                     writer.writerow([
-                        entry.get('tick', ''),
-                        entry.get('character', ''),
-                        entry.get('goal', ''),
-                        entry.get('emotion', ''),
+                        entry.get('tick', ''), entry.get('character', ''),
+                        entry.get('goal', ''), entry.get('emotion', ''),
                         entry.get('ai_state', '')
                     ])
         except Exception as e:
@@ -628,29 +633,23 @@ class TimelinePlotter:
     def generate_all_charts(self):
         if not HAS_MATPLOTLIB:
             print("[WARNING] matplotlib not installed. Skipping chart generation.")
-            print("[INFO] Install with: pip install matplotlib")
             return
 
         print("\n" + "="*70)
         print("GENERATING TIMELINE CHARTS")
         print("="*70)
 
-        # Actions (from catalog)
+        self._diagnose("Before chart generation")
+
         self._chart_actions_by_character(plt, np)
         self._chart_actions_over_time(plt, np)
         self._chart_actions_lineplot(plt, np)
         self._chart_emotion_action_heatmap(plt, np)
-
-        # AI States
         self._chart_aistates_by_character(plt, np)
         self._chart_emotion_aistate_heatmap(plt, np)
-
-        # Emotions
         self._chart_emotions_by_character(plt, np)
         self._chart_emotions_over_time(plt, np)
         self._chart_emotions_lineplot(plt, np)
-
-        # Goals
         self._chart_goals_by_character(plt, np)
         self._chart_goals_over_time(plt, np)
         self._chart_goals_lineplot(plt, np)
@@ -666,10 +665,6 @@ class TimelinePlotter:
                 continue
 
     def _get_categories_from_counts(self, counts_dict: Dict[str, Dict[str, int]]) -> List[str]:
-        """
-        Return the sorted list of all categories (keys of the inner dicts),
-        filtered to those with a total count > 0.
-        """
         totals = defaultdict(int)
         for inner in counts_dict.values():
             for cat, cnt in inner.items():
@@ -679,12 +674,13 @@ class TimelinePlotter:
     def _stacked_barh_with_full_legend(self, counts_dict, categories, colors,
                                        title, xlabel, filepath,
                                        fig_width=12):
-        """
-        Draw a horizontal stacked bar chart per character, with a COMPLETE
-        legend built from `categories` (not from the labels of one row).
-        """
         if not counts_dict or not categories:
+            print(f"[WARN] Skipping {filepath} (empty counts or categories)")
             return
+
+        if len(categories) == 1:
+            print(f"[WARN] {filepath}: only 1 category detected ({categories[0]}). "
+                  f"The source data only contains 1 value for this field.")
 
         self._safe_set_style(plt)
 
@@ -706,18 +702,14 @@ class TimelinePlotter:
         ax.set_xlabel(xlabel)
         ax.set_title(title)
 
-        # Build a COMPLETE legend using proxy handles (independent of plot order)
         legend_handles = [
             mpatches.Patch(color=colors[cat], label=cat)
             for cat in categories
         ]
         ax.legend(
-            handles=legend_handles,
-            labels=categories,
-            loc='center left',
-            bbox_to_anchor=(1, 0.5),
-            fontsize=8,
-            frameon=True,
+            handles=legend_handles, labels=categories,
+            loc='center left', bbox_to_anchor=(1, 0.5),
+            fontsize=8, frameon=True,
         )
 
         plt.tight_layout()
@@ -738,11 +730,9 @@ class TimelinePlotter:
         filepath = os.path.join(self.world_folder, "actions_by_character.png")
         self._stacked_barh_with_full_legend(
             counts_dict=self.character_action_counts,
-            categories=categories,
-            colors=colors,
+            categories=categories, colors=colors,
             title='Actions Distribution by Character (colored by Action Type)',
-            xlabel='Number of Actions',
-            filepath=filepath,
+            xlabel='Number of Actions', filepath=filepath,
         )
 
     def _chart_actions_over_time(self, plt, np):
@@ -750,22 +740,20 @@ class TimelinePlotter:
             return
         tick_actions = defaultdict(lambda: defaultdict(int))
         for entry in self.action_timeline:
-            tick = entry.get('tick', 0)
-            action = entry.get('action', 'Unknown')
-            tick_actions[tick][action] += 1
+            tick_actions[entry.get('tick', 0)][entry.get('action', 'Unknown')] += 1
         if not tick_actions:
             return
 
         self._safe_set_style(plt)
         ticks = sorted(tick_actions.keys())
         all_actions = set()
-        for action_counts in tick_actions.values():
-            all_actions.update(action_counts.keys())
+        for c in tick_actions.values():
+            all_actions.update(c.keys())
         all_actions = sorted(all_actions)
 
         fig, ax = plt.subplots(figsize=(14, 6))
         cmap = plt.cm.get_cmap('tab20', max(20, len(all_actions)))
-        action_colors = {action: cmap(i % 20) for i, action in enumerate(all_actions)}
+        action_colors = {a: cmap(i % 20) for i, a in enumerate(all_actions)}
 
         bottoms = np.zeros(len(ticks))
         for action in all_actions:
@@ -794,21 +782,19 @@ class TimelinePlotter:
             return
         tick_actions = defaultdict(lambda: defaultdict(int))
         for entry in self.action_timeline:
-            tick = entry.get('tick', 0)
-            action = entry.get('action', 'Unknown')
-            tick_actions[tick][action] += 1
+            tick_actions[entry.get('tick', 0)][entry.get('action', 'Unknown')] += 1
         if not tick_actions:
             return
 
         self._safe_set_style(plt)
         ticks = sorted(tick_actions.keys())
         all_actions = set()
-        for counts in tick_actions.values():
-            all_actions.update(counts.keys())
+        for c in tick_actions.values():
+            all_actions.update(c.keys())
         all_actions = sorted(all_actions)
 
         cmap = plt.cm.get_cmap('tab20', max(20, len(all_actions)))
-        action_colors = {action: cmap(i % 20) for i, action in enumerate(all_actions)}
+        action_colors = {a: cmap(i % 20) for i, a in enumerate(all_actions)}
 
         fig, ax = plt.subplots(figsize=(14, 6))
         for action in all_actions:
@@ -843,20 +829,16 @@ class TimelinePlotter:
         n_rows, n_cols = matrix.shape
         fig, ax = plt.subplots(figsize=(max(10, n_cols * 0.7), max(5, n_rows * 0.6)))
 
-        im = ax.imshow(
-            matrix, cmap='YlOrRd', aspect='auto', origin='upper',
-            extent=(-0.5, n_cols - 0.5, n_rows - 0.5, -0.5)
-        )
+        im = ax.imshow(matrix, cmap='YlOrRd', aspect='auto', origin='upper',
+                       extent=(-0.5, n_cols - 0.5, n_rows - 0.5, -0.5))
         plt.colorbar(im, ax=ax, label='Frequency')
 
         ax.set_xticks(np.arange(n_cols))
         ax.set_yticks(np.arange(n_rows))
         ax.set_xticklabels(actions, rotation=45, ha='right', fontsize=8)
         ax.set_yticklabels(emotions, fontsize=9)
-
         ax.set_xlim(-0.5, n_cols - 0.5)
         ax.set_ylim(n_rows - 0.5, -0.5)
-
         ax.set_xlabel('Action')
         ax.set_ylabel('Emotion')
         ax.set_title('Emotion-Action Co-occurrence Matrix')
@@ -865,8 +847,7 @@ class TimelinePlotter:
         for i in range(n_rows):
             for j in range(n_cols):
                 if matrix[i, j] > 0:
-                    ax.text(j, i, int(matrix[i, j]),
-                            ha="center", va="center",
+                    ax.text(j, i, int(matrix[i, j]), ha="center", va="center",
                             color="black" if matrix[i, j] < max_val / 2 else "white",
                             fontsize=7)
 
@@ -889,11 +870,9 @@ class TimelinePlotter:
         filepath = os.path.join(self.world_folder, "aistates_by_character.png")
         self._stacked_barh_with_full_legend(
             counts_dict=self.character_aistate_counts,
-            categories=categories,
-            colors=colors,
+            categories=categories, colors=colors,
             title='AI States Distribution by Character (colored by State)',
-            xlabel='Frequency',
-            filepath=filepath,
+            xlabel='Frequency', filepath=filepath,
         )
 
     def _chart_emotion_aistate_heatmap(self, plt, np):
@@ -904,20 +883,16 @@ class TimelinePlotter:
         n_rows, n_cols = matrix.shape
         fig, ax = plt.subplots(figsize=(max(10, n_cols * 0.7), max(5, n_rows * 0.6)))
 
-        im = ax.imshow(
-            matrix, cmap='YlOrRd', aspect='auto', origin='upper',
-            extent=(-0.5, n_cols - 0.5, n_rows - 0.5, -0.5)
-        )
+        im = ax.imshow(matrix, cmap='YlOrRd', aspect='auto', origin='upper',
+                       extent=(-0.5, n_cols - 0.5, n_rows - 0.5, -0.5))
         plt.colorbar(im, ax=ax, label='Frequency')
 
         ax.set_xticks(np.arange(n_cols))
         ax.set_yticks(np.arange(n_rows))
         ax.set_xticklabels(states, rotation=45, ha='right', fontsize=8)
         ax.set_yticklabels(emotions, fontsize=9)
-
         ax.set_xlim(-0.5, n_cols - 0.5)
         ax.set_ylim(n_rows - 0.5, -0.5)
-
         ax.set_xlabel('AI State')
         ax.set_ylabel('Emotion')
         ax.set_title('Emotion-AI State Co-occurrence Matrix')
@@ -926,8 +901,7 @@ class TimelinePlotter:
         for i in range(n_rows):
             for j in range(n_cols):
                 if matrix[i, j] > 0:
-                    ax.text(j, i, int(matrix[i, j]),
-                            ha="center", va="center",
+                    ax.text(j, i, int(matrix[i, j]), ha="center", va="center",
                             color="black" if matrix[i, j] < max_val / 2 else "white",
                             fontsize=7)
 
@@ -940,21 +914,17 @@ class TimelinePlotter:
     def _build_matrix(self, matrix_dict):
         if not matrix_dict:
             return None, None, None
-
         rows = sorted(matrix_dict.keys())
         cols = set()
         for col_counts in matrix_dict.values():
             cols.update(col_counts.keys())
         cols = sorted(cols)
-
         if not rows or not cols:
             return None, None, None
-
         matrix = np.zeros((len(rows), len(cols)), dtype=int)
         for i, row in enumerate(rows):
             for j, col in enumerate(cols):
                 matrix[i, j] = matrix_dict[row].get(col, 0)
-
         return matrix, rows, cols
 
     # ---- EMOTIONS ----
@@ -972,11 +942,9 @@ class TimelinePlotter:
         filepath = os.path.join(self.world_folder, "emotions_by_character.png")
         self._stacked_barh_with_full_legend(
             counts_dict=self.character_emotion_counts,
-            categories=categories,
-            colors=colors,
+            categories=categories, colors=colors,
             title='Emotions Distribution by Character (colored by Emotion)',
-            xlabel='Frequency',
-            filepath=filepath,
+            xlabel='Frequency', filepath=filepath,
         )
 
     def _chart_emotions_over_time(self, plt, np):
@@ -984,23 +952,21 @@ class TimelinePlotter:
             return
         tick_emotions = defaultdict(lambda: defaultdict(int))
         for entry in self.emotion_timeline:
-            tick = entry.get('tick', 0)
-            emotion = entry.get('emotion', 'neutral')
-            tick_emotions[tick][emotion] += 1
+            tick_emotions[entry.get('tick', 0)][entry.get('emotion', 'neutral')] += 1
         if not tick_emotions:
             return
 
         self._safe_set_style(plt)
         ticks = sorted(tick_emotions.keys())
         all_emotions = set()
-        for emotion_counts in tick_emotions.values():
-            all_emotions.update(emotion_counts.keys())
+        for c in tick_emotions.values():
+            all_emotions.update(c.keys())
         all_emotions = sorted(all_emotions)
 
         fig, ax = plt.subplots(figsize=(14, 6))
         emotion_colors = {
-            emotion: self.emotion_color_palette[i % len(self.emotion_color_palette)]
-            for i, emotion in enumerate(all_emotions)
+            e: self.emotion_color_palette[i % len(self.emotion_color_palette)]
+            for i, e in enumerate(all_emotions)
         }
 
         bottoms = np.zeros(len(ticks))
@@ -1030,22 +996,20 @@ class TimelinePlotter:
             return
         tick_emotions = defaultdict(lambda: defaultdict(int))
         for entry in self.emotion_timeline:
-            tick = entry.get('tick', 0)
-            emotion = entry.get('emotion', 'neutral')
-            tick_emotions[tick][emotion] += 1
+            tick_emotions[entry.get('tick', 0)][entry.get('emotion', 'neutral')] += 1
         if not tick_emotions:
             return
 
         self._safe_set_style(plt)
         ticks = sorted(tick_emotions.keys())
         all_emotions = set()
-        for counts in tick_emotions.values():
-            all_emotions.update(counts.keys())
+        for c in tick_emotions.values():
+            all_emotions.update(c.keys())
         all_emotions = sorted(all_emotions)
 
         emotion_colors = {
-            emotion: self.emotion_color_palette[i % len(self.emotion_color_palette)]
-            for i, emotion in enumerate(all_emotions)
+            e: self.emotion_color_palette[i % len(self.emotion_color_palette)]
+            for i, e in enumerate(all_emotions)
         }
 
         fig, ax = plt.subplots(figsize=(14, 6))
@@ -1088,11 +1052,9 @@ class TimelinePlotter:
         filepath = os.path.join(self.world_folder, "goals_by_character.png")
         self._stacked_barh_with_full_legend(
             counts_dict=self.character_goal_counts,
-            categories=categories,
-            colors=colors,
+            categories=categories, colors=colors,
             title='Goals Distribution by Character (colored by Goal)',
-            xlabel='Frequency',
-            filepath=filepath,
+            xlabel='Frequency', filepath=filepath,
         )
 
     def _chart_goals_over_time(self, plt, np):
@@ -1100,23 +1062,21 @@ class TimelinePlotter:
             return
         tick_goals = defaultdict(lambda: defaultdict(int))
         for entry in self.goal_timeline:
-            tick = entry.get('tick', 0)
-            goal = entry.get('goal', 'Unknown')
-            tick_goals[tick][goal] += 1
+            tick_goals[entry.get('tick', 0)][entry.get('goal', 'Unknown')] += 1
         if not tick_goals:
             return
 
         self._safe_set_style(plt)
         ticks = sorted(tick_goals.keys())
         all_goals = set()
-        for goal_counts in tick_goals.values():
-            all_goals.update(goal_counts.keys())
+        for c in tick_goals.values():
+            all_goals.update(c.keys())
         all_goals = sorted(all_goals)
 
         fig, ax = plt.subplots(figsize=(14, 6))
         goal_colors = {
-            goal: self.goal_color_palette[i % len(self.goal_color_palette)]
-            for i, goal in enumerate(all_goals)
+            g: self.goal_color_palette[i % len(self.goal_color_palette)]
+            for i, g in enumerate(all_goals)
         }
 
         bottoms = np.zeros(len(ticks))
@@ -1146,22 +1106,20 @@ class TimelinePlotter:
             return
         tick_goals = defaultdict(lambda: defaultdict(int))
         for entry in self.goal_timeline:
-            tick = entry.get('tick', 0)
-            goal = entry.get('goal', 'Unknown')
-            tick_goals[tick][goal] += 1
+            tick_goals[entry.get('tick', 0)][entry.get('goal', 'Unknown')] += 1
         if not tick_goals:
             return
 
         self._safe_set_style(plt)
         ticks = sorted(tick_goals.keys())
         all_goals = set()
-        for counts in tick_goals.values():
-            all_goals.update(counts.keys())
+        for c in tick_goals.values():
+            all_goals.update(c.keys())
         all_goals = sorted(all_goals)
 
         goal_colors = {
-            goal: self.goal_color_palette[i % len(self.goal_color_palette)]
-            for i, goal in enumerate(all_goals)
+            g: self.goal_color_palette[i % len(self.goal_color_palette)]
+            for i, g in enumerate(all_goals)
         }
 
         fig, ax = plt.subplots(figsize=(14, 6))
@@ -1200,31 +1158,24 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Regenerate everything (CSVs + charts) from a world folder
   python swm_plots.py --world world_2024_01_15
   python swm_plots.py --folder world_2024_01_15
-
-  # Only CSVs (from runtime state or existing CSVs)
   python swm_plots.py --folder world_2024_01_15 --csv-only
-
-  # Only charts (assumes CSVs already exist in the folder)
   python swm_plots.py --folder world_2024_01_15 --charts-only
-
-  # Force loading ONLY from CSV, ignore runtime JSON
+  python swm_plots.py --folder world_2024_01_15 --prefer-csv
   python swm_plots.py --folder world_2024_01_15 --from-csv
         """
     )
-    # --world and --folder are aliases (same dest)
     parser.add_argument('--world', '--folder', dest='world', type=str, required=True,
-                        help='Path to world folder (contains CSVs / runtime JSON). '
-                             '--folder is an alias of --world.')
+                        help='Path to world folder. --folder is an alias of --world.')
     parser.add_argument('--csv-only', action='store_true',
                         help='Only export CSV files, no charts')
     parser.add_argument('--charts-only', action='store_true',
                         help='Only generate charts (assumes CSVs exist)')
     parser.add_argument('--from-csv', action='store_true',
-                        help='Force loading timeline data from CSV files, '
-                             'ignoring world_state_runtime.json and timelines_snapshot.json')
+                        help='Force loading ONLY from CSV files (ignore snapshot/runtime)')
+    parser.add_argument('--prefer-csv', action='store_true',
+                        help='Try CSV first, then snapshot/runtime as fallback')
 
     args = parser.parse_args()
 
@@ -1232,14 +1183,11 @@ Examples:
         print(f"[ERROR] World folder not found: {args.world}")
         sys.exit(1)
 
-    # Verify that at least one input source exists
     runtime_path = os.path.join(args.world, "world_state_runtime.json")
     snapshot_path = os.path.join(args.world, "timelines_snapshot.json")
     expected_csvs = [
-        "actions_timeline.csv",
-        "emotions_timeline.csv",
-        "ai_states_timeline.csv",
-        "goals_timeline.csv",
+        "actions_timeline.csv", "emotions_timeline.csv",
+        "ai_states_timeline.csv", "goals_timeline.csv",
     ]
     existing_csvs = [f for f in expected_csvs if os.path.exists(os.path.join(args.world, f))]
     has_runtime = os.path.exists(runtime_path)
@@ -1247,30 +1195,33 @@ Examples:
 
     if not (has_runtime or has_snapshot or existing_csvs):
         print(f"[ERROR] No usable data found in {args.world}.")
-        print(f"        Looked for: world_state_runtime.json, timelines_snapshot.json "
-              f"and/or {expected_csvs}")
         sys.exit(1)
 
     plotter = TimelinePlotter(args.world)
+    plotter.verbose = True
 
     if not args.charts_only:
         loaded = False
 
         if args.from_csv:
-            # Explicitly force CSV loading
             if existing_csvs:
                 print(f"[INFO] --from-csv: loading from CSVs {existing_csvs}")
                 plotter.load_from_csv()
                 loaded = True
             else:
-                print(f"[WARN] --from-csv specified but no CSVs found in {args.world}")
-        else:
-            # Prefer full snapshot, then runtime (windowed), then CSV
+                print(f"[WARN] --from-csv specified but no CSVs found")
+
+        elif args.prefer_csv:
+            if existing_csvs:
+                print(f"[INFO] --prefer-csv: loading from CSVs first")
+                plotter.load_from_csv()
+                loaded = True
+
+        if not loaded:
+            # Default priority: snapshot -> runtime -> CSV
             if has_snapshot:
                 if plotter.load_timelines_snapshot():
                     loaded = True
-                else:
-                    print(f"[WARN] timelines_snapshot.json present but could not be loaded")
 
             if not loaded and has_runtime:
                 try:
@@ -1281,13 +1232,11 @@ Examples:
                             or plotter.ai_state_timeline or plotter.goal_timeline):
                         print(f"[OK] Loaded timeline from runtime state: {runtime_path}")
                         loaded = True
-                    else:
-                        print(f"[WARN] Runtime state was empty, falling back to CSV")
                 except Exception as e:
-                    print(f"[WARN] Could not load runtime state ({e}), falling back to CSV")
+                    print(f"[WARN] Could not load runtime state ({e})")
 
             if not loaded and existing_csvs:
-                print(f"[INFO] Loading timeline data from CSVs: {existing_csvs}")
+                print(f"[INFO] Fallback: loading from CSVs")
                 plotter.load_from_csv()
                 loaded = True
 
@@ -1296,7 +1245,7 @@ Examples:
     if not args.csv_only:
         if (not plotter.action_timeline and not plotter.emotion_timeline
                 and not plotter.ai_state_timeline and not plotter.goal_timeline):
-            print(f"[INFO] No timeline data in memory, attempting CSV load before charts...")
+            print(f"[INFO] No timeline data in memory, attempting CSV load...")
             plotter.load_from_csv()
         plotter.generate_all_charts()
 

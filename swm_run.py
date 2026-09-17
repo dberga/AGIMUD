@@ -38,6 +38,7 @@ class WorldRunner:
         self.tick_interval = 1.0 / fps
         self.running = False
         self.tick_count = 0
+        self._current_tick = 0
         self.world = None
         self.event_history = []
         self.max_history = 100
@@ -671,7 +672,8 @@ class WorldRunner:
 
     def _update_world(self, render: bool = True):
         self.tick_count += 1
-
+        self.world._current_tick = self.tick_count
+        
         timers = self.world.world_states.get('global_timers', {})
         timers['world_time'] = timers.get('world_time', 0) + 1
         timers['day_cycle'] = (timers.get('day_cycle', 0) + 1) % 1440
@@ -689,10 +691,24 @@ class WorldRunner:
                 next_state = self.world.select_next_behavior_state(char)
                 if next_state:
                     self.world.set_behavior_state(char, next_state)
-
+            
             self._update_character(char)
             self._process_character_social_actions(char, chars)
-
+            # Detect real events and update emotion
+            appraisal_events = self._detect_appraisal_events(char)
+            if appraisal_events:
+                # Pick highest-intensity event
+                event = appraisal_events[0]
+                emotion, intensity = self.world.compute_emotion_from_appraisal(char, event)
+                # Duration: 1 to 60 ticks depending on intensity
+                duration = max(1, int(intensity * 60))
+                self.world.emotion_manager.set_character_emotion(
+                    char, emotion, intensity, duration_ticks=duration
+                )
+            # Always decay emotion each tick
+            self.world.emotion_manager.tick_emotion_decay(char, self.tick_count)
+            #current_emotion = self.world.get_character_emotion(char)
+            
             # Track emotion / ai_state / goal timelines
             name = char.get('name', 'Unknown')
             current_emotion = self.world.get_character_emotion(char) if hasattr(self.world, 'get_character_emotion') else 'neutral'
@@ -727,9 +743,12 @@ class WorldRunner:
             if name in self.emotion_history:
                 if self.emotion_history[name] is not None and self.emotion_history[name] != current_emotion:
                     if name in self.statistics['characters']:
-                        self.statistics['characters'][name]['emotion_transitions'].append(
-                            f"{self.emotion_history[name]}->{current_emotion}"
-                        )
+                        # Detect emotion change
+                        prev = self.emotion_history.get(name)
+                        if prev and prev != current_emotion:
+                            self.statistics['characters'][name]['emotion_transitions'].append(
+                                f"{prev}->{current_emotion}"
+                            )
                         self.statistics['global']['total_emotion_transitions'] += 1
                 self.emotion_history[name] = current_emotion
 
@@ -1395,7 +1414,47 @@ class WorldRunner:
             print(f"[ERROR] Unknown command '{command}'. Type 'help' for options.")
 
         return False
-
+        
+    def _detect_appraisal_events(self, char):
+        """Detect real events that trigger emotion appraisals."""
+        events = []
+        status = char.get('status_variables', {})
+        ai_state = char.get('ai_state', 'IDLE').upper()
+        prev_ai_state = char.get('_prev_ai_state', ai_state)
+        
+        # 1. State transitions
+        if prev_ai_state != ai_state:
+            if ai_state in ('FLEEING', 'FLEE'):
+                events.append('threat_detected')
+            elif ai_state == 'COMBAT' and status.get('health', 100) < 40:
+                events.append('goal_blocked')  # can't win
+            elif ai_state == 'REST':
+                events.append('loss_experienced')  # losing time
+            elif ai_state in ('SOCIALIZE', 'SHARE'):
+                events.append('goal_achieved')  # social goal met
+            elif ai_state in ('EXPLORE', 'SEARCHING'):
+                events.append('novelty_detected')
+            elif ai_state == 'GATHER':
+                events.append('goal_achieved')
+        
+        # 2. Resource / status events
+        if status.get('health', 100) < 30:
+            events.append('threat_detected')
+        if status.get('stamina', 100) < 20:
+            events.append('loss_experienced')
+        if status.get('hunger', 0) > 80 or status.get('thirst', 0) > 80:
+            events.append('goal_blocked')  # survival blocked
+        
+        # 3. Random events during tick (10% chance)
+        if random.random() < 0.10:
+            events.append(random.choice([
+                'novelty_detected', 'goal_achieved', 'goal_blocked',
+                'threat_detected', 'loss_experienced', 'contamination_detected'
+            ]))
+        
+        char.set('_prev_ai_state', ai_state)
+        return events
+    
     # ==================== RUN MODES ====================
 
     def _run_dynamic_mode(self):

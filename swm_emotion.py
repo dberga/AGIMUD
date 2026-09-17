@@ -192,12 +192,13 @@ class EmotionManager:
         status = char.get('status_variables', {})
         return status.get('current_emotion', 'neutral')
     
-    def set_character_emotion(self, char: DynamicEntity, emotion: str, intensity: float = 0.5):
+    def set_character_emotion(self, char, emotion, intensity=0.5, duration_ticks=1):
         if emotion not in self.ekman_emotions:
             emotion = 'neutral'
-        
         status = char.get('status_variables', {})
         status['current_emotion'] = emotion
+        status['emotion_intensity'] = intensity
+        status['emotion_expires_at'] = getattr(self, '_current_tick', 0) + duration_ticks
         char.set('status_variables', status)
         
         memory = char.get('memory_perception', {})
@@ -217,6 +218,28 @@ class EmotionManager:
         
         memory['reasoning_stack'] = reasoning
         char.set('memory_perception', memory)
+    def tick_emotion_decay(self, char, current_tick):
+        """Decay emotion over time; when expired, drift toward neutral."""
+        status = char.get('status_variables', {})
+        emotion = status.get('current_emotion', 'neutral')
+        expires_at = status.get('emotion_expires_at', 0)
+        intensity = status.get('emotion_intensity', 0.5)
+        
+        if emotion == 'neutral':
+            return
+        
+        if current_tick >= expires_at:
+            # Decay intensity first
+            new_intensity = max(0.1, intensity - 0.15)
+            if new_intensity <= 0.15:
+                status['current_emotion'] = 'neutral'
+                status['emotion_intensity'] = 0.0
+                status['emotion_expires_at'] = 0
+            else:
+                status['emotion_intensity'] = new_intensity
+                # Extend a bit
+                status['emotion_expires_at'] = current_tick + 5
+        char.set('status_variables', status)
     
     def compute_emotion_from_appraisal(self, char: DynamicEntity, event_type: str) -> Tuple[str, float]:
         """Compute emotion and intensity from an event."""

@@ -43,31 +43,37 @@
     "stamina_high": -0.2
   },
   "goal_hierarchy": {
-    "survival": {
-      "triggers": ["hunger > 70", "thirst > 70", "health < 30", "stamina < 30"],
-      "priority": 1
-    },
-    "social_belonging": {
-      "triggers": ["morale < 30", "emotional_state == joy"],
-      "priority": 2
-    },
-    "exploration": {
-      "triggers": ["emotional_state == surprise", "stamina > 70"],
-      "priority": 3
-    },
-    "power_achievement": {
-      "triggers": ["emotional_state == anger", "health > 60"],
-      "priority": 4
-    },
-    "knowledge_acquisition": {
-      "triggers": ["stamina > 70", "health > 70", "morale > 70"],
-      "priority": 5
-    },
-    "altruism": {
-      "triggers": ["benevolence > 0.7", "has_allies"],
-      "priority": 6
-    }
-  },
+	  "survival": {
+		"triggers": ["hunger > 70", "thirst > 70", "health < 30", "stamina < 30"],
+		"priority": 1,
+		"min_duration_ticks": 1, "max_duration_ticks": 120
+	  },
+	  "social_belonging": {
+		"triggers": ["morale < 30", "emotional_state == joy", "emotional_state == sadness"],
+		"priority": 2,
+		"min_duration_ticks": 10, "max_duration_ticks": 720
+	  },
+	  "exploration": {
+		"triggers": ["stamina > 60", "emotional_state == surprise", "stamina > 50 AND morale > 50"],
+		"priority": 3,
+		"min_duration_ticks": 5, "max_duration_ticks": 360
+	  },
+	  "power_achievement": {
+		"triggers": ["emotional_state == anger", "health > 50", "achievement > 0.5"],
+		"priority": 4,
+		"min_duration_ticks": 20, "max_duration_ticks": 1440
+	  },
+	  "knowledge_acquisition": {
+		"triggers": ["stamina > 50", "health > 50", "morale > 50"],
+		"priority": 5,
+		"min_duration_ticks": 30, "max_duration_ticks": 2880
+	  },
+	  "altruism": {
+		"triggers": ["benevolence > 0.5", "has_allies", "emotional_state == joy"],
+		"priority": 6,
+		"min_duration_ticks": 15, "max_duration_ticks": 720
+	  }
+	},
   "condition_registry": {
     "has_allies": {
       "type": "function",
