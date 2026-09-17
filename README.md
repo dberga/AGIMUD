@@ -68,3 +68,28 @@ Then joiner Peers can connect now, through:
 python swm_run_p2p.py --join --world world_p2p --config network_p2p_join_config.json
 ```
 You can reload the world state by discarting the `--new` flag when running the p2p host again.
+
+### Agent Clients and Peers
+This section is a buildup of agents that interact with the world runners (as in a MUD), being able to chat describing what is going on, and request setting actions and variables for characters.
+
+Create an agent instance using the submodule [LM Studio Python Wrapper](https://github.com/dberga/lmstudio-python-wrapper) and let it join a SWM Server session, with many parameters such as chat style "dramatic", "funny", etc.; selected AI model to load, temperature, agent chat frequency, MCP selection, and character in case of roleplaying as a specific character. See this example:
+```
+python swm_run_agent_client.py --chat_style "dramatic" --actions_enabled
+```
+For the case of P2P, an agent can be run as host or as joiner:
+```
+python swm_run_agent_p2p.py --host
+```
+```
+python swm_run_agent_p2p.py --join
+```
+### Multiple Worlds Analysis
+You can either run through Linux/MAC the script `run_worlds.sh` or in Windows `run_worlds.bat` to generate and run distinct instances of world simulations (the number of worlds and number of characters are parameterized. See here creating 10 worlds of 8 characters each.
+```
+sh run_worlds.sh 10 8
+```
+Alternatively you can analyze specific world folders directly from those you have created:
+```
+python swm_analyze.py --worlds "worldsim1,worldsim2,worldsim3,worldsim4,worldsim5,worldsim6,worldsim7,worldsim8,worldsim9"
+```
+This will plot box plots, temporal (per tick/epoch) line plots, scatter and co-occurrence matrixes as well as run quantitative analysis between worlds and per world/character factors, including actions, ai states, emotion states and status variables (health, stamina, morale, thirst, hunger).
