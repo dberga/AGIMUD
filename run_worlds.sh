@@ -2,10 +2,11 @@
 set -u
 
 # --- Step 0: config ---
-PREFIX="${1:-worldsim}"
+PREFIX="${1:-world}"
 NUM_WORLDS="${2:-9}"
 NUM_CHARACTERS="${3:-8}"
-NUM_EPOCHS="${4:-10000}"
+NUM_OBJECTS="${4:-15}"
+NUM_EPOCHS="${5:-10080}"
 
 echo "Prefix: $PREFIX | Worlds: $NUM_WORLDS | Characters: $NUM_CHARACTERS"
 
@@ -24,7 +25,7 @@ for i in $(seq 1 "$NUM_WORLDS"); do
     folder="${PREFIX}${i}"
     (
         echo "[$folder] generate..."
-        python swm_generate.py --folder "$folder" --characters "$NUM_CHARACTERS" \
+        python swm_generate.py --folder "$folder" --characters "$NUM_CHARACTERS" --objects "$NUM_OBJECTS" \
             || { echo "[$folder] generate FAILED"; exit 1; }
 
         echo "[$folder] run..."
