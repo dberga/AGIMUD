@@ -116,13 +116,13 @@ python swm_run_agent_p2p.py --host --new --world world_p2p --chat_style "creepy 
 ```
 python swm_run_agent_p2p.py --join --world world_p2p --chat_style "funny and descriptive" --agent_chat_frequency 3 --config network_p2p_join_config.json
 ```
-## Multiple Worlds Analysis
-You can either run through Linux/MAC the script `run_worlds.sh` or in Windows `run_worlds.bat` to generate and run distinct instances of world simulations (the number of worlds and number of characters are parameterized. See here creating 10 worlds of 8 characters each.
+## Analyzing Multiple Worlds
+You can either run through Linux/MAC the script `run_worlds.sh` or in Windows `run_worlds.bat` to generate and run distinct instances of world simulations (the number of worlds, number of characters, number of objects and max epochs are parameterized. See here creating by default 9 worlds of 8 characters and 15 objects each for 10080 epochs (24h of simulated world time).
 ```
-sh run_worlds.sh 10 8
+sh run_worlds.sh 9 8 15 10080
 ```
 Alternatively you can analyze specific world folders directly from those you have created:
 ```
-python swm_analyze.py --worlds "worldsim1,worldsim2,worldsim3,worldsim4,worldsim5,worldsim6,worldsim7,worldsim8,worldsim9"
+python swm_analyze.py --worlds "world1,world2,world3,world4,world5,world6,world7,world8,world9"
 ```
 This will plot box plots, temporal (per tick/epoch) line plots, scatter and co-occurrence matrixes as well as run quantitative analysis between worlds and per world/character factors, including actions, ai states, emotion states and status variables (health, stamina, morale, thirst, hunger).
