@@ -5,6 +5,7 @@ set -u
 PREFIX="${1:-worldsim}"
 NUM_WORLDS="${2:-9}"
 NUM_CHARACTERS="${3:-8}"
+NUM_EPOCHS="${4:-10000}"
 
 echo "Prefix: $PREFIX | Worlds: $NUM_WORLDS | Characters: $NUM_CHARACTERS"
 
@@ -27,7 +28,7 @@ for i in $(seq 1 "$NUM_WORLDS"); do
             || { echo "[$folder] generate FAILED"; exit 1; }
 
         echo "[$folder] run..."
-        python swm_run.py --folder "$folder" \
+        python swm_run.py --world "$folder" --max-epoch %NUM_EPOCHS% \
             || { echo "[$folder] run FAILED"; exit 1; }
 
         echo "[$folder] done"
@@ -50,4 +51,4 @@ fi
 WORLDS=$(for i in $(seq 1 "$NUM_WORLDS"); do printf "%s%s," "$PREFIX" "$i"; done | sed 's/,$//')
 
 echo "Analyzing worlds: $WORLDS"
-python swm_analyze.py --worlds "$WORLDS"
+python swm_analyze.py --worlds "$WORLDS" --out analysis_%PREFIX%
