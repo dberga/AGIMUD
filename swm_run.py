@@ -93,12 +93,12 @@ class WorldRunner:
 
         # Load variable catalog
         self.variable_catalog = self._load_variable_catalog()
+        
+        # Initialize plotter (delegated module)
+        self.plotter = TimelinePlotter(self.world_folder)
 
         # Initialize Simulated World Module with full reasoning corpora
         self._initialize_world(load_existing)
-
-        # Initialize plotter (delegated module)
-        self.plotter = TimelinePlotter(self.world_folder)
 
         # Create log file in world folder
         run_timestamp = datetime.now().strftime("%d_%m_%Y-%H_%M_%S")
