@@ -1,3 +1,5 @@
 *_log_*
 world_**/
 __pycache__/
+*/
+*.tex
