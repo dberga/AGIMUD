@@ -413,11 +413,11 @@ def main():
         epilog="""
 Examples:
   python chargraph2latex.py
-  python chargraph2latex.py --graph character_graph.json --output ./tables
+  python chargraph2latex.py --input character_graph.json --output ./tables
   python chargraph2latex.py --combined  # Export all tables into one file
         """
     )
-    parser.add_argument('--graph', type=str, default='character_graph.json',
+    parser.add_argument('--input', type=str, default='character_graph.json',
                         help='Path to character_graph.json (default: character_graph.json)')
     parser.add_argument('--output', type=str, default='.',
                         help='Output directory for LaTeX files (default: current directory)')
@@ -430,11 +430,11 @@ Examples:
     
     print("="*70)
     print("CHARACTER GRAPH TO LATEX CONVERTER")
-    print(f"Input: {args.graph}")
+    print(f"Input: {args.input}")
     print(f"Output: {args.output}")
     print("="*70)
     
-    converter = CharGraphToLaTeX(args.graph, args.output)
+    converter = CharGraphToLaTeX(args.input, args.output)
     
     if args.list:
         print("\nAvailable Tables:")
