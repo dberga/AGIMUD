@@ -15,7 +15,7 @@ set "NUM_OBJECTS=%~4"
 if "%NUM_OBJECTS%"=="" set "NUM_OBJECTS=15"
 
 set "NUM_EPOCHS=%~5"
-if "%NUM_EPOCHS%"=="" set "NUM_EPOCHS=10080"
+if "%NUM_EPOCHS%"=="" set "NUM_EPOCHS=10000"
 
 echo Prefix: %PREFIX% ^| Worlds: %NUM_WORLDS% ^| Characters: %NUM_CHARACTERS% ^| Epochs: %NUM_EPOCHS%
 

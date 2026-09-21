@@ -6,7 +6,7 @@ PREFIX="${1:-world}"
 NUM_WORLDS="${2:-9}"
 NUM_CHARACTERS="${3:-8}"
 NUM_OBJECTS="${4:-15}"
-NUM_EPOCHS="${5:-10080}"
+NUM_EPOCHS="${5:-10000}"
 
 echo "Prefix: $PREFIX | Worlds: $NUM_WORLDS | Characters: $NUM_CHARACTERS"
 
