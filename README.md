@@ -15,6 +15,13 @@ python swm_generate.py --folder world_sample --characters 8
 ```
 This will generate several jsons (`characters.json`, `objects.json`, `rules.json`, `scenes.json`, `world_states.json`, `action_catalog.json`, `condition_registry.json`, `character_graph.json` and concatenating all the info in `knowledge_base.json` ) that will be exported in `world_X-Y/` where X-Y is the date of the generation.
 
+You can export the latex tables from the Charcter Profiles, Condition Registry and Rules with:
+```
+python chargraph2latex.py --input world_sample/character_graph.json --output world_sample
+python condition_registry2latex.py --input world_sample/condition_registry.json --output world_sample
+python rules2latex.py --input world_sample/rules.json --output world_sample
+```
+
 ### World Runner
 Then run this to execute a new simulated world (note: remove --new to continue an existing session):
 ```
@@ -52,18 +59,21 @@ SWM INTERACTIVE COMMANDS
   q / quit / exit      - Disconnect and exit
 ============================================================
 ```
-
 ## Social Reasoning and Affective Methods (ToM + Emotion Tests)
 
 To run the theories of mind, check (and modify as needed) the `reasoning_tests.json` and run tests with:
 ```
-python swm_reason.py
+python swm_reason.py > results_reasoning.txt
 ```
 To run emotion tests, check (and modify as needed) the `emotion_tests.json` and run the tests with:
 ```
-python swm_emotion.py
+python swm_emotion.py > results_emotion.txt
 ```
-The `swm.py` and `swm_run.py` world simulations runs epochs including the integration and analysis of behavior, values, governance and belief motors, as well as emotions, goals and action rules.
+The `swm.py` and `swm_run.py` world simulations runs epochs including the integration and analysis of behavior, values, governance and belief motors, as well as emotions, goals and action rules. You can export the latex tables with:
+```
+python emotion2latex.py --input results_emotion.txt
+python emotion2reasoning.py --input results_reasoning.txt
+```
 
 ## Network Connections (MUDs + Agents)
 
