@@ -173,7 +173,7 @@ def main():
 Examples:
   python condition_registry2latex.py
   python condition_registry2latex.py --input condition_registry.json --output ./tables
-  python condition_registry2latex.py --input world_tryal4/condition_registry.json --combined
+  python condition_registry2latex.py --input world_sample/condition_registry.json --combined
         """
     )
     parser.add_argument('--input', '-i', type=str, default='condition_registry.json',

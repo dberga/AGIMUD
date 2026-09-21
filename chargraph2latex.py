@@ -414,6 +414,7 @@ def main():
 Examples:
   python chargraph2latex.py
   python chargraph2latex.py --input character_graph.json --output ./tables
+  python chargraph2latex.py --input world_sample/character_graph.json --output world_sample
   python chargraph2latex.py --combined  # Export all tables into one file
         """
     )

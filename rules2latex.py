@@ -501,7 +501,7 @@ def main():
 Examples:
   python rules2latex.py
   python rules2latex.py --input rules.json --output ./tables
-  python rules2latex.py --input world_tryal4/rules.json --combined
+  python rules2latex.py --input world_sample/rules.json --combined
         """
     )
     parser.add_argument('--input', '-i', type=str, default='rules.json',
