@@ -411,11 +411,11 @@ class WorldRunner:
                 "objects": [o.to_dict() for o in self.world.objects.get_all()],
                 "event_history": self.event_history[-self.max_history:],
                 "tick_count": self.tick_count,
-                "action_timeline": self.plotter.action_timeline[-1000:],
-                "emotion_timeline": self.plotter.emotion_timeline[-1000:],
-                "ai_state_timeline": self.plotter.ai_state_timeline[-1000:],
-                "goal_timeline": self.plotter.goal_timeline[-1000:],
-                "status_timeline": self.plotter.status_timeline[-1000:],
+                "action_timeline": self.plotter.action_timeline, #[-1000:]
+                "emotion_timeline": self.plotter.emotion_timeline, #[-1000:]
+                "ai_state_timeline": self.plotter.ai_state_timeline, #[-1000:]
+                "goal_timeline": self.plotter.goal_timeline, #[-1000:]
+                "status_timeline": self.plotter.status_timeline, #[-1000:]
                 "last_saved": datetime.now().isoformat()
             }
 
