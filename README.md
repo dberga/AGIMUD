@@ -127,9 +127,9 @@ python swm_run_agent_p2p.py --host --new --world world_p2p --chat_style "creepy 
 python swm_run_agent_p2p.py --join --world world_p2p --chat_style "funny and descriptive" --agent_chat_frequency 3 --config network_p2p_join_config.json
 ```
 ## Analyzing Multiple Worlds
-You can either run through Linux/MAC the script `run_worlds.sh` or in Windows `run_worlds.bat` to generate and run distinct instances of world simulations (the number of worlds, number of characters, number of objects and max epochs are parameterized. See here creating by default 9 worlds of 8 characters and 15 objects each for 10080 epochs (24h of simulated world time).
+You can either run through Linux/MAC the script `run_worlds.sh` or in Windows `run_worlds.bat` to generate and run distinct instances of world simulations (the number of worlds, number of characters, number of objects and max epochs are parameterized. See here creating by default 9 worlds of 8 characters and 15 objects each for 10000 epochs (~7 days or 167h of simulated world time).
 ```
-sh run_worlds.sh 9 8 15 10080
+sh run_worlds.sh 9 8 15 10000
 ```
 Alternatively you can analyze specific world folders directly from those you have created:
 ```
