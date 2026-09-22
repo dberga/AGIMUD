@@ -1755,8 +1755,8 @@ class TimelinePlotter:
         raw_total = [sum(tick_counts[t].values()) for t in ticks]
         total_s = _rolling_mean(raw_total, smooth_window)
         ticks_ds, total_ds = _downsample(ticks, total_s)
-        ax.plot(ticks_ds, total_ds, linestyle='--', linewidth=1.2,
-                color='black', alpha=0.6, label='TOTAL')
+        #ax.plot(ticks_ds, total_ds, linestyle='--', linewidth=1.2,
+        #        color='black', alpha=0.6, label='TOTAL')
 
         ax.set_xlabel('Tick')
         ax.set_ylabel('Frequency (all characters, smoothed)')
